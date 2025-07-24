@@ -1,0 +1,18 @@
+[project]
+name = "boltzina-env"
+version = "0.1.0"
+description = "Environment for boltzina"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "boltz>=2.2.0",
+    "botorch>=0.14.0",
+    "jupyterlab>=4.4.2",
+    "openbabel-wheel>=3.1.1.22",
+    "optuna>=4.3.0",
+    "pdb-tools>=2.5.0",
+    "py3dmol>=2.4.2",
+]
+
+[tool.uv.sources]
+alphafold3-tools = { git = "https://github.com/cddlab/alphafold3_tools.git" }
