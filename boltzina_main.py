@@ -13,17 +13,18 @@ from boltz.main import get_cache_path
 
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
         self.exhaustiveness = exhaustiveness
         self.mgl_path = mgl_path
+        self.work_dir = work_dir
         self.results = []
 
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Prepare receptor PDBQT file
         self.receptor_pdbqt = self._prepare_receptor()
 
@@ -35,7 +36,7 @@ class Boltzina:
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
         receptor_pdbqt = self.output_dir / "receptor.pdbqt"
-        
+
         # Use provided mgl_path or find MGL_PATH (try environment variable or common locations)
         mgl_path = self.mgl_path or os.environ.get('MGL_PATH')
         if not mgl_path:
@@ -49,20 +50,20 @@ class Boltzina:
                 if os.path.exists(path):
                     mgl_path = path
                     break
-        
+
         if not mgl_path or not os.path.exists(mgl_path):
             raise RuntimeError("MGL_PATH not found. Please provide mgl_path parameter, set MGL_PATH environment variable, or install MGLTools.")
-        
+
         prepare_receptor_script = f"{mgl_path}/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py"
         pythonsh = f"{mgl_path}/bin/pythonsh"
-        
+
         if not os.path.exists(prepare_receptor_script):
             raise RuntimeError(f"prepare_receptor4.py not found at {prepare_receptor_script}")
-        
+
         # Set up environment
         env = os.environ.copy()
         env['LD_LIBRARY_PATH'] = f"{mgl_path}/lib"
-        
+
         # Run prepare_receptor4.py
         cmd = [
             pythonsh,
@@ -70,12 +71,12 @@ class Boltzina:
             "-r", str(self.receptor_pdb),
             "-o", str(receptor_pdbqt)
         ]
-        
+
         subprocess.run(cmd, env=env, check=True)
-        
+
         if not receptor_pdbqt.exists():
             raise RuntimeError(f"Failed to create receptor PDBQT file: {receptor_pdbqt}")
-        
+
         return receptor_pdbqt
 
     def _load_ccd(self) -> Dict[str, Any]:
@@ -105,7 +106,7 @@ class Boltzina:
             self._preprocess_docked_structures(idx, docked_pdbqt)
 
             # Update CCD with ligand information
-            self._update_ccd_for_ligand(idx, ligand_output_dir)
+            self._update_ccd_for_ligand(ligand_output_dir)
 
             # Run Boltzina scoring for each pose
             self._score_poses(idx, ligand_output_dir, ligand_path.stem)
@@ -178,7 +179,7 @@ class Boltzina:
         ]
         subprocess.run(cmd4, check=True)
 
-    def _update_ccd_for_ligand(self, ligand_idx: int, ligand_output_dir: Path) -> None:
+    def _update_ccd_for_ligand(self, ligand_output_dir: Path) -> None:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
 
         # Find the first docked ligand PDB file
@@ -204,7 +205,8 @@ class Boltzina:
     def _score_poses(self, ligand_idx: int, ligand_output_dir: Path, ligand_name: str) -> None:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
         boltz_output_dir = ligand_output_dir / "boltz_out"
-        work_dir = "test_data/KIF11/boltz_out/boltz_results_base_config"
+        boltz_output_dir.mkdir(exist_ok=True, parents=True)
+        work_dir = self.work_dir or "boltz_results_base_config"
 
         # Find all processed poses
         complex_files = list(docked_ligands_dir.glob("*_B_complex_fix.cif"))
@@ -216,7 +218,7 @@ class Boltzina:
 
             try:
                 # Run Boltzina scoring
-                result = calc_from_data(
+                calc_from_data(
                     cif_path=str(complex_file),
                     output_dir=str(boltz_output_dir),
                     fname=fname,
@@ -305,6 +307,7 @@ def main():
     parser.add_argument("--exhaustiveness", type=int, default=8, help="Vina exhaustiveness parameter")
     parser.add_argument("--ligand_format", default="sdf", help="Ligand file format")
     parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
+    parser.add_argument("--work_dir", help="Working directory for Boltz results")
 
     args = parser.parse_args()
 
@@ -314,7 +317,8 @@ def main():
         output_dir=args.output_dir,
         config=args.config,
         exhaustiveness=args.exhaustiveness,
-        mgl_path=args.mgl_path
+        mgl_path=args.mgl_path,
+        work_dir=args.work_dir
     )
 
     # Run the pipeline

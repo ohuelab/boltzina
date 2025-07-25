@@ -2,9 +2,9 @@ import pickle
 from pathlib import Path
 from rdkit.Chem import AllChem
 
-from boltz.data.parse.mmcif import parse_mmcif
 from boltz.main import get_cache_path
 from boltz.data.parse.schema import compute_3d_conformer
+from boltzina.affinity.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import predict_affinity
 
 def preprocess_mol(smiles_seq):
@@ -33,7 +33,7 @@ def preprocess_mol(smiles_seq):
 def calc_from_data(cif_path, fname, ccd, work_dir, output_dir, seed=None):
     work_dir = Path(work_dir)
     output_dir = Path(output_dir)
-    cache_dir = get_cache_path()
+    cache_dir = Path(get_cache_path())
     moldir = cache_dir / 'mols'
     cif_path = Path(cif_path)
     parsed_structure = parse_mmcif(
