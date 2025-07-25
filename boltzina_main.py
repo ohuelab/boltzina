@@ -217,8 +217,8 @@ class Boltzina:
             fname = f"{ligand_idx}_{pose_idx}"
 
             try:
-                # Run Boltzina scoring
-                calc_from_data(
+                # Run Boltzina scoring and get predictions
+                predictions = calc_from_data(
                     cif_path=str(complex_file),
                     output_dir=str(boltz_output_dir),
                     fname=fname,
@@ -226,24 +226,44 @@ class Boltzina:
                     work_dir=work_dir
                 )
 
-                # Parse affinity results
-                affinity_file = boltz_output_dir / f"{fname}" / f"affinity_{fname}.json"
-                if affinity_file.exists():
-                    with open(affinity_file, 'r') as f:
-                        affinity_data = json.load(f)
+                # Extract affinity results from predictions
+                if predictions and len(predictions) > 0:
+                    pred_data = predictions[0]  # Get the first prediction
 
-                    self.results.append({
+                    # Extract affinity values from the prediction data
+
+                    affinity_pred_value = float(pred_data['affinity_pred_value'].item()) if pred_data['affinity_pred_value'] is not None else None
+
+                    affinity_probability_binary = float(pred_data['affinity_probability_binary'].item()) if pred_data['affinity_probability_binary'] is not None else None
+
+                    affinity_pred_value1 = float(pred_data['affinity_pred_value1'].item()) if pred_data['affinity_pred_value1'] is not None else None
+
+                    affinity_probability_binary1 = float(pred_data['affinity_probability_binary1'].item()) if pred_data['affinity_probability_binary1'] is not None else None
+
+                    affinity_pred_value2 = float(pred_data['affinity_pred_value2'].item()) if pred_data['affinity_pred_value2'] is not None else None
+
+                    affinity_probability_binary2 = float(pred_data['affinity_probability_binary2'].item()) if pred_data['affinity_probability_binary2'] is not None else None
+                    # Save prediction data as JSON for this pose
+                    json_output_dir = boltz_output_dir / "json"
+                    json_output_dir.mkdir(exist_ok=True, parents=True)
+
+                    pose_data = {
                         'ligand_name': ligand_name,
                         'ligand_idx': ligand_idx,
                         'docking_rank': int(pose_idx),
                         'docking_score': self._extract_docking_score(ligand_output_dir / "docked.pdbqt", int(pose_idx)),
-                        'affinity_pred_value': affinity_data.get('affinity_pred_value', None),
-                        'affinity_probability_binary': affinity_data.get('affinity_probability_binary', None),
-                        'affinity_pred_value1': affinity_data.get('affinity_pred_value1', None),
-                        'affinity_probability_binary1': affinity_data.get('affinity_probability_binary1', None),
-                        'affinity_pred_value2': affinity_data.get('affinity_pred_value2', None),
-                        'affinity_probability_binary2': affinity_data.get('affinity_probability_binary2', None)
-                    })
+                        'affinity_pred_value': affinity_pred_value,
+                        'affinity_probability_binary': affinity_probability_binary,
+                        'affinity_pred_value1': affinity_pred_value1,
+                        'affinity_probability_binary1': affinity_probability_binary1,
+                        'affinity_pred_value2': affinity_pred_value2,
+                        'affinity_probability_binary2': affinity_probability_binary2
+                    }
+
+                    json_file = json_output_dir / f"{fname}_prediction.json"
+                    with open(json_file, 'w') as f:
+                        json.dump(pose_data, f, indent=2, default=str)
+                    self.results.append(pose_data)
 
             except Exception as e:
                 print(f"Error scoring pose {pose_idx} for ligand {ligand_idx}: {e}")
