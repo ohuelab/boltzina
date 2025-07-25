@@ -81,7 +81,7 @@ def predict_affinity(out_dir, output_dir = None, structures_dir = None, msa_dir 
         ema=False,
         pairformer_args=asdict(pairformer_args),
         msa_args=asdict(msa_args),
-        steering_args={"fk_steering": False, "guidance_update": False},
+        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False},
         affinity_mw_correction=affinity_mw_correction,
     )
     model_module.eval()

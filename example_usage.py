@@ -31,7 +31,7 @@ def example_usage():
         config=config,
         exhaustiveness=8,
         mgl_path=mgl_path,
-        work_dir="test_data/KIF11/boltz_out/boltz_results_base_config"
+        work_dir="test_data/KIF11/boltz_out/boltz_results_base"
     )
 
     print("Running Vina docking and Boltz scoring...")
