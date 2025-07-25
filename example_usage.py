@@ -5,13 +5,19 @@ from pathlib import Path
 
 def example_usage():
     # Example usage of Boltzina
-    receptor_pdbqt = "test_data/KIF11/docking/receptor.pdbqt"
-    ligand_files = ["test_data/KIF11/active_mols/CHEMBL1163892.sdf"]
+    receptor_pdb = "test_data/KIF11/docking/receptor.pdb"
+    ligand_files = ["test_data/KIF11/active_mols/CHEMBL1163892.mol2"]
     output_dir = "example_output"
+    config = "test_data/KIF11/docking/config.txt"
+    mgl_path = "/gs/bs/tga-furui/apps/mgltools_x86_64Linux2_1.5.7"
 
     # Check if test files exist
-    if not Path(receptor_pdbqt).exists():
-        print(f"Receptor file {receptor_pdbqt} not found. Please provide a valid receptor PDBQT file.")
+    if not Path(receptor_pdb).exists():
+        print(f"Receptor file {receptor_pdb} not found. Please provide a valid receptor PDB file.")
+        return
+
+    if not Path(config).exists():
+        print(f"Config file {config} not found. Please provide a valid Vina config file.")
         return
 
     if not all(Path(f).exists() for f in ligand_files):
@@ -20,9 +26,11 @@ def example_usage():
 
     print("Initializing Boltzina...")
     boltzina = Boltzina(
-        receptor_pdbqt=receptor_pdbqt,
+        receptor_pdb=receptor_pdb,
         output_dir=output_dir,
-        exhaustiveness=8
+        config=config,
+        exhaustiveness=8,
+        mgl_path=mgl_path
     )
 
     print("Running Vina docking and Boltz scoring...")
@@ -56,6 +64,7 @@ def example_usage():
         print("- OpenBabel")
         print("- PDB tools")
         print("- maxit")
+        print("- MGLTools (with MGL_PATH environment variable set)")
 
 if __name__ == "__main__":
     example_usage()

@@ -13,19 +13,70 @@ from boltz.main import get_cache_path
 
 
 class Boltzina:
-    def __init__(self, receptor_pdbqt: str, output_dir: str, exhaustiveness: int = 8):
-        self.receptor_pdbqt = Path(receptor_pdbqt)
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None):
+        self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
+        self.config = Path(config)
         self.exhaustiveness = exhaustiveness
+        self.mgl_path = mgl_path
         self.results = []
 
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Prepare receptor PDBQT file
+        self.receptor_pdbqt = self._prepare_receptor()
 
         # Initialize cache directory and CCD
-        self.cache_dir = get_cache_path()
+        self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = self._load_ccd()
+
+    def _prepare_receptor(self) -> Path:
+        """Prepare receptor PDBQT file using prepare_receptor4.py"""
+        receptor_pdbqt = self.output_dir / "receptor.pdbqt"
+        
+        # Use provided mgl_path or find MGL_PATH (try environment variable or common locations)
+        mgl_path = self.mgl_path or os.environ.get('MGL_PATH')
+        if not mgl_path:
+            # Try common installation paths
+            possible_paths = [
+                "/usr/local/mgltools",
+                "/opt/mgltools",
+                os.path.expanduser("~/mgltools")
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    mgl_path = path
+                    break
+        
+        if not mgl_path or not os.path.exists(mgl_path):
+            raise RuntimeError("MGL_PATH not found. Please provide mgl_path parameter, set MGL_PATH environment variable, or install MGLTools.")
+        
+        prepare_receptor_script = f"{mgl_path}/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py"
+        pythonsh = f"{mgl_path}/bin/pythonsh"
+        
+        if not os.path.exists(prepare_receptor_script):
+            raise RuntimeError(f"prepare_receptor4.py not found at {prepare_receptor_script}")
+        
+        # Set up environment
+        env = os.environ.copy()
+        env['LD_LIBRARY_PATH'] = f"{mgl_path}/lib"
+        
+        # Run prepare_receptor4.py
+        cmd = [
+            pythonsh,
+            prepare_receptor_script,
+            "-r", str(self.receptor_pdb),
+            "-o", str(receptor_pdbqt)
+        ]
+        
+        subprocess.run(cmd, env=env, check=True)
+        
+        if not receptor_pdbqt.exists():
+            raise RuntimeError(f"Failed to create receptor PDBQT file: {receptor_pdbqt}")
+        
+        return receptor_pdbqt
 
     def _load_ccd(self) -> Dict[str, Any]:
         if self.ccd_path.exists():
@@ -72,6 +123,7 @@ class Boltzina:
             "--receptor", str(self.receptor_pdbqt),
             "--ligand", str(ligand_pdbqt),
             "--out", str(output_pdbqt),
+            "--config", str(self.config),
             "--exhaustiveness", str(self.exhaustiveness)
         ]
         subprocess.run(cmd, check=True)
@@ -111,7 +163,7 @@ class Boltzina:
         subprocess.run(cmd1, shell=True, check=True)
 
         # Merge with receptor
-        cmd2 = f"pdb_merge {self.receptor_pdbqt.with_suffix('.pdb')} {prep_file} | pdb_tidy > {complex_file}"
+        cmd2 = f"pdb_merge {self.receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
         subprocess.run(cmd2, shell=True, check=True)
 
         # Convert to CIF
@@ -246,19 +298,23 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Boltzina: Vina docking + Boltz scoring pipeline")
-    parser.add_argument("--receptor", required=True, help="Receptor PDBQT file")
+    parser.add_argument("--receptor", required=True, help="Receptor PDB file")
     parser.add_argument("--ligands", required=True, nargs="+", help="Ligand files (SDF/MOL2/SMI)")
     parser.add_argument("--output_dir", required=True, help="Output directory")
+    parser.add_argument("--config", required=True, help="Vina config file")
     parser.add_argument("--exhaustiveness", type=int, default=8, help="Vina exhaustiveness parameter")
     parser.add_argument("--ligand_format", default="sdf", help="Ligand file format")
+    parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
 
     args = parser.parse_args()
 
     # Initialize Boltzina
     boltzina = Boltzina(
-        receptor_pdbqt=args.receptor,
+        receptor_pdb=args.receptor,
         output_dir=args.output_dir,
-        exhaustiveness=args.exhaustiveness
+        config=args.config,
+        exhaustiveness=args.exhaustiveness,
+        mgl_path=args.mgl_path
     )
 
     # Run the pipeline
