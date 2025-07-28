@@ -10,7 +10,7 @@ from boltz.data.types import Manifest
 
 def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False):
     """Load and return a Boltz2 model for affinity prediction.
-    
+
     Args:
         affinity_checkpoint: Path to the affinity checkpoint file
         sampling_steps_affinity: Number of sampling steps
@@ -20,13 +20,13 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         model: Model type ("boltz2")
         step_scale: Step scale for diffusion
         affinity_mw_correction: Whether to apply molecular weight correction
-        
+
     Returns:
         Loaded Boltz2 model instance ready for inference
     """
     cache_dir = get_cache_path()
     cache_dir = Path(cache_dir)
-    
+
     if affinity_checkpoint is None:
         affinity_checkpoint = cache_dir / "boltz2_aff.ckpt"
 
@@ -67,11 +67,14 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         affinity_mw_correction=affinity_mw_correction,
     )
     model_module.eval()
-    
+
     return model_module
 
-def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None):
+def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, manifest = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None):
     out_dir = Path(out_dir)
+    output_dir = Path(output_dir)
+    structures_dir = Path(structures_dir)
+
     cache_dir = get_cache_path()
     cache_dir = Path(cache_dir)
     mol_dir = cache_dir/'mols'
@@ -94,11 +97,11 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
     msa_dir = out_dir/"processed"/"msa" if msa_dir is None else msa_dir
     constraints_dir = out_dir/"processed"/"constraints" if constraints_dir is None else constraints_dir
     template_dir = out_dir/"processed"/"templates" if template_dir is None else template_dir
-    extra_mols_dir = out_dir/"processed"/"mols" if extra_mols_dir is None else extra_mols_dir
 
     manifest = Manifest.load(out_dir / "processed" / "manifest.json" if manifest is None else manifest)
 
     output_dir = out_dir / "predictions" if output_dir is None else output_dir
+    extra_mols_dir = output_dir / "mols"
 
     pred_writer = BoltzAffinityWriter(
         data_dir=structures_dir,
@@ -107,7 +110,7 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
 
     data_module = Boltz2InferenceDataModule(
         manifest=manifest,
-        target_dir=out_dir / "predictions",
+        target_dir=output_dir,
         msa_dir=msa_dir,
         mol_dir=mol_dir,
         num_workers=num_workers,

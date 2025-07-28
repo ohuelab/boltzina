@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
 from rdkit import Chem
+Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
 from boltzina.affinity.process_structure import calc_from_data
 from boltzina.affinity.predict_affinity import load_boltz2_model
@@ -33,7 +34,7 @@ class Boltzina:
         self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = self._load_ccd()
-        
+
         # Load Boltz2 model once for reuse
         self.boltz_model = load_boltz2_model()
 
@@ -183,9 +184,10 @@ class Boltzina:
         ]
         subprocess.run(cmd4, check=True)
 
-    def _update_ccd_for_ligand(self, ligand_output_dir: Path) -> None:
+    def _update_ccd_for_ligand(self, ligand_output_dir: Path, ligand_name: str) -> None:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
-
+        mol_dir = self.cache_dir / "mols"
+        mol_dir.mkdir(exist_ok=True, parents=True)
         # Find the first docked ligand PDB file
         pdb_files = list(docked_ligands_dir.glob("docked_ligand_*.pdb"))
         if not pdb_files:
@@ -204,6 +206,8 @@ class Boltzina:
                 atom_name = pdb_info.GetName().strip()
                 atom.SetProp("name", atom_name)
 
+        with open(mol_dir / f"{ligand_name}.pkl", "wb") as f:
+            pickle.dump({"MOL": mol}, f)
         self.ccd["MOL"] = mol
 
     def _score_poses(self, ligand_idx: int, ligand_output_dir: Path, ligand_name: str) -> None:
