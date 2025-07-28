@@ -43,9 +43,11 @@ def calc_from_data(cif_path, fname, ccd, work_dir, output_dir, seed=None, model_
         call_compute_interfaces=False
     )
     structure_v2 = parsed_structure.data
-    output_path = output_dir / f"{fname}.npz"
+    (output_dir / fname).mkdir(exist_ok=True, parents=True)
+    output_path = output_dir / fname /  f"pre_affinity_{fname}.npz"
+    manifest_path = output_dir / fname / f"manifest.json"
     structure_v2.dump(output_path)
-    prediction = predict_affinity(work_dir, model_module=model_module, output_dir = output_dir, structures_dir = output_dir, seed=seed)
+    prediction = predict_affinity(work_dir, model_module=model_module, output_dir = output_dir, structures_dir = output_dir, seed=seed, manifest=manifest_path)
     return prediction
 
 if __name__ == "__main__":

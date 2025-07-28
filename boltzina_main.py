@@ -15,14 +15,17 @@ from boltz.main import get_cache_path
 
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, vina_override: bool = False, boltz_override: bool = False):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
         self.exhaustiveness = exhaustiveness
         self.mgl_path = mgl_path
         self.work_dir = work_dir
+        self.vina_override = vina_override
+        self.boltz_override = boltz_override
         self.results = []
+
 
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +114,7 @@ class Boltzina:
             self._preprocess_docked_structures(idx, docked_pdbqt)
 
             # Update CCD with ligand information
-            self._update_ccd_for_ligand(ligand_output_dir)
+            self._update_ccd_for_ligand(ligand_output_dir, ligand_path.stem)
 
             # Run Boltzina scoring for each pose
             self._score_poses(idx, ligand_output_dir, ligand_path.stem)
@@ -124,6 +127,9 @@ class Boltzina:
             raise ValueError(f"Unsupported ligand format: {input_format}")
 
     def _run_vina(self, ligand_pdbqt: Path, output_pdbqt: Path) -> None:
+        if output_pdbqt.exists() and not self.vina_override:
+            print(f"Skipping Vina docking for {output_pdbqt} because it already exists")
+            return
         cmd = [
             "vina",
             "--receptor", str(self.receptor_pdbqt),
@@ -223,8 +229,17 @@ class Boltzina:
             # Extract pose index
             pose_idx = complex_file.stem.split("_")[2]  # docked_ligand_{pose_idx}_B_complex_fix
             fname = f"{ligand_idx}_{pose_idx}"
-
+            if (boltz_output_dir / fname / f"affinity_base.json").exists() and not self.boltz_override:
+                print(f"Skipping Boltzina scoring for {fname} because it already exists")
+                continue
             try:
+                with open(self.work_dir / "processed" / "manifest.json", "r") as f:
+                    manifest = json.load(f)
+                manifest["records"][0]["id"] = fname
+                manifest_path = boltz_output_dir / fname / f"manifest.json"
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest, f)
+
                 # Run Boltzina scoring and get predictions
                 predictions = calc_from_data(
                     cif_path=str(complex_file),
@@ -232,7 +247,7 @@ class Boltzina:
                     fname=fname,
                     ccd=self.ccd,
                     work_dir=work_dir,
-                    model_module=self.boltz_model
+                    model_module=self.boltz_model,
                 )
 
                 # Extract affinity results from predictions
@@ -252,9 +267,6 @@ class Boltzina:
                     affinity_pred_value2 = float(pred_data['affinity_pred_value2'].item()) if pred_data['affinity_pred_value2'] is not None else None
 
                     affinity_probability_binary2 = float(pred_data['affinity_probability_binary2'].item()) if pred_data['affinity_probability_binary2'] is not None else None
-                    # Save prediction data as JSON for this pose
-                    json_output_dir = boltz_output_dir / "json"
-                    json_output_dir.mkdir(exist_ok=True, parents=True)
 
                     pose_data = {
                         'ligand_name': ligand_name,
@@ -268,10 +280,6 @@ class Boltzina:
                         'affinity_pred_value2': affinity_pred_value2,
                         'affinity_probability_binary2': affinity_probability_binary2
                     }
-
-                    json_file = json_output_dir / f"{fname}_prediction.json"
-                    with open(json_file, 'w') as f:
-                        json.dump(pose_data, f, indent=2, default=str)
                     self.results.append(pose_data)
 
             except Exception as e:
@@ -337,6 +345,8 @@ def main():
     parser.add_argument("--ligand_format", default="sdf", help="Ligand file format")
     parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
     parser.add_argument("--work_dir", help="Working directory for Boltz results")
+    parser.add_argument("--vina_override", action="store_true", help="Override existing Vina output directory")
+    parser.add_argument("--boltz_override", action="store_true", help="Override existing Boltz output directory")
 
     args = parser.parse_args()
 
@@ -347,7 +357,9 @@ def main():
         config=args.config,
         exhaustiveness=args.exhaustiveness,
         mgl_path=args.mgl_path,
-        work_dir=args.work_dir
+        work_dir=args.work_dir,
+        vina_override=args.vina_override,
+        boltz_override=args.boltz_override
     )
 
     # Run the pipeline
