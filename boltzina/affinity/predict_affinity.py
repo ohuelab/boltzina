@@ -8,21 +8,30 @@ from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltz.data.write.writer import BoltzAffinityWriter, BoltzWriter
 from boltz.data.types import Manifest
 
-def predict_affinity(out_dir, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None):
-    out_dir = Path(out_dir)
+def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False):
+    """Load and return a Boltz2 model for affinity prediction.
+    
+    Args:
+        affinity_checkpoint: Path to the affinity checkpoint file
+        sampling_steps_affinity: Number of sampling steps
+        diffusion_samples_affinity: Number of diffusion samples
+        subsample_msa: Whether to subsample MSA
+        num_subsampled_msa: Number of MSA sequences to subsample
+        model: Model type ("boltz2")
+        step_scale: Step scale for diffusion
+        affinity_mw_correction: Whether to apply molecular weight correction
+        
+    Returns:
+        Loaded Boltz2 model instance ready for inference
+    """
     cache_dir = get_cache_path()
     cache_dir = Path(cache_dir)
-    mol_dir = cache_dir/'mols'
-
-    if seed is not None:
-        seed_everything(seed)
-
+    
     if affinity_checkpoint is None:
         affinity_checkpoint = cache_dir / "boltz2_aff.ckpt"
 
     if not affinity_checkpoint.exists():
         raise FileNotFoundError(f"Affinity checkpoint not found at {affinity_checkpoint}")
-
 
     predict_affinity_args = {
         "recycling_steps": 5,
@@ -44,6 +53,43 @@ def predict_affinity(out_dir, output_dir = None, structures_dir = None, msa_dir 
         num_subsampled_msa=num_subsampled_msa,
         use_paired_feature=model == "boltz2",
     )
+
+    model_module = Boltz2.load_from_checkpoint(
+        affinity_checkpoint,
+        strict=True,
+        predict_args=predict_affinity_args,
+        map_location="cpu",
+        diffusion_process_args=asdict(diffusion_params),
+        ema=False,
+        pairformer_args=asdict(pairformer_args),
+        msa_args=asdict(msa_args),
+        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False},
+        affinity_mw_correction=affinity_mw_correction,
+    )
+    model_module.eval()
+    
+    return model_module
+
+def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None):
+    out_dir = Path(out_dir)
+    cache_dir = get_cache_path()
+    cache_dir = Path(cache_dir)
+    mol_dir = cache_dir/'mols'
+
+    if seed is not None:
+        seed_everything(seed)
+
+    if model_module is None:
+        model_module = load_boltz2_model(
+            affinity_checkpoint=affinity_checkpoint,
+            sampling_steps_affinity=sampling_steps_affinity,
+            diffusion_samples_affinity=diffusion_samples_affinity,
+            subsample_msa=subsample_msa,
+            num_subsampled_msa=num_subsampled_msa,
+            model=model,
+            step_scale=step_scale,
+            affinity_mw_correction=affinity_mw_correction
+        )
     structures_dir = out_dir/"processed"/"structures" if structures_dir is None else structures_dir
     msa_dir = out_dir/"processed"/"msa" if msa_dir is None else msa_dir
     constraints_dir = out_dir/"processed"/"constraints" if constraints_dir is None else constraints_dir
@@ -71,21 +117,6 @@ def predict_affinity(out_dir, output_dir = None, structures_dir = None, msa_dir 
         override_method="other",
         affinity=True,
     )
-
-    model_module = Boltz2.load_from_checkpoint(
-        affinity_checkpoint,
-        strict=True,
-        predict_args=predict_affinity_args,
-        map_location="cpu",
-        diffusion_process_args=asdict(diffusion_params),
-        ema=False,
-        pairformer_args=asdict(pairformer_args),
-        msa_args=asdict(msa_args),
-        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False},
-        affinity_mw_correction=affinity_mw_correction,
-    )
-    model_module.eval()
-
 
     trainer = Trainer(
         default_root_dir=out_dir,

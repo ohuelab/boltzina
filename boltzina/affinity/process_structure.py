@@ -30,7 +30,7 @@ def preprocess_mol(smiles_seq):
     mol_no_h = AllChem.RemoveHs(mol, sanitize=False)
     return mol_no_h
 
-def calc_from_data(cif_path, fname, ccd, work_dir, output_dir, seed=None):
+def calc_from_data(cif_path, fname, ccd, work_dir, output_dir, seed=None, model_module=None):
     work_dir = Path(work_dir)
     output_dir = Path(output_dir)
     cache_dir = Path(get_cache_path())
@@ -45,7 +45,7 @@ def calc_from_data(cif_path, fname, ccd, work_dir, output_dir, seed=None):
     structure_v2 = parsed_structure.data
     output_path = output_dir / f"{fname}.npz"
     structure_v2.dump(output_path)
-    prediction = predict_affinity(work_dir, output_dir = output_dir, structures_dir = output_dir, seed=seed)
+    prediction = predict_affinity(work_dir, model_module=model_module, output_dir = output_dir, structures_dir = output_dir, seed=seed)
     return prediction
 
 if __name__ == "__main__":

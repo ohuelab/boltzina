@@ -9,6 +9,7 @@ import pandas as pd
 from rdkit import Chem
 
 from boltzina.affinity.process_structure import calc_from_data
+from boltzina.affinity.predict_affinity import load_boltz2_model
 from boltz.main import get_cache_path
 
 
@@ -32,6 +33,9 @@ class Boltzina:
         self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = self._load_ccd()
+        
+        # Load Boltz2 model once for reuse
+        self.boltz_model = load_boltz2_model()
 
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
@@ -223,7 +227,8 @@ class Boltzina:
                     output_dir=str(boltz_output_dir),
                     fname=fname,
                     ccd=self.ccd,
-                    work_dir=work_dir
+                    work_dir=work_dir,
+                    model_module=self.boltz_model
                 )
 
                 # Extract affinity results from predictions
