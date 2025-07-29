@@ -16,6 +16,13 @@ from boltzina.affinity.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
 from boltz.main import get_cache_path
 
+boltz_model = None
+
+def init_worker():
+    global boltz_model
+    print(f"Initializing model for worker process: {os.getpid()}")
+    boltz_model = load_boltz2_model()
+
 
 class Boltzina:
     def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1):
@@ -45,8 +52,6 @@ class Boltzina:
         self.ccd = self._load_ccd()
 
         self.fname = self._get_fname()
-        # Load Boltz2 model once for reuse
-        self.boltz_model = load_boltz2_model()
 
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
@@ -185,7 +190,6 @@ class Boltzina:
 
     def _convert_to_pdbqt(self, input_file: Path, output_file: Path, input_format: str) -> None:
         if output_file.exists() and not self.vina_override:
-            print(f"Skipping ligand conversion for {output_file} because it already exists")
             return
         if input_format.lower() in ["sdf", "mol2", "smi"]:
             cmd = ["obabel", str(input_file), "-O", str(output_file)]
@@ -350,13 +354,14 @@ class Boltzina:
 
         # Use torch multiprocessing for GPU-intensive scoring
         if batch_size == 1:
+            init_worker()
             results = []
             for task in scoring_tasks:
                 result = self._score_single_pose(task)
                 results.append(result)
         else:
             mp.set_start_method('spawn', force=True)
-            with mp.Pool(batch_size) as pool:
+            with mp.Pool(batch_size, initializer=init_worker) as pool:
                 results = pool.map(self._score_single_pose, scoring_tasks)
 
         # Collect results
@@ -369,6 +374,10 @@ class Boltzina:
         ligand_idx, pose_idx, ligand_name, ligand_output_dir = task_data
         work_dir = self.work_dir or "boltz_results_base_config"
 
+        global boltz_model
+        if boltz_model is None:
+            raise ValueError("boltz_model is not set")
+
         pose_output_dir = self.output_dir / str(ligand_idx) / "boltz_out" / str(pose_idx) / self.fname
 
         if (pose_output_dir / f"affinity_{self.fname}.json").exists() and not self.boltz_override:
@@ -380,7 +389,7 @@ class Boltzina:
         # Run Boltzina scoring directly with predict_affinity
         predictions = predict_affinity(
             work_dir,
-            model_module=self.boltz_model,
+            model_module=boltz_model,
             output_dir=str(output_dir),  # boltz_out directory
             structures_dir=str(output_dir),
             extra_mols_dir=extra_mols_dir,
