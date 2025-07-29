@@ -3,14 +3,15 @@ import subprocess
 import pickle
 import json
 import csv
+import copy
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
 from rdkit import Chem
 Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
-from boltzina.affinity.process_structure import calc_from_data
-from boltzina.affinity.predict_affinity import load_boltz2_model
+from boltzina.affinity.mmcif import parse_mmcif
+from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
 from boltz.main import get_cache_path
 
 
@@ -26,7 +27,6 @@ class Boltzina:
         self.boltz_override = boltz_override
         self.results = []
 
-
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -38,6 +38,7 @@ class Boltzina:
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = self._load_ccd()
 
+        self.fname = self._get_fname()
         # Load Boltz2 model once for reuse
         self.boltz_model = load_boltz2_model()
 
@@ -94,6 +95,12 @@ class Boltzina:
         else:
             return {}
 
+    def _get_fname(self) -> str:
+        manifest_path = self.work_dir / "processed" / "manifest.json"
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+        return manifest["records"][0]["id"]
+
     def run(self, ligand_files: List[str], ligand_format: str = "sdf") -> None:
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
@@ -114,7 +121,7 @@ class Boltzina:
             self._preprocess_docked_structures(idx, docked_pdbqt)
 
             # Update CCD with ligand information
-            self._update_ccd_for_ligand(ligand_output_dir, ligand_path.stem)
+            ccd = self._update_ccd_for_ligand(ligand_output_dir, ligand_path.stem)
 
             # Run Boltzina scoring for each pose
             self._score_poses(idx, ligand_output_dir, ligand_path.stem)
@@ -214,13 +221,40 @@ class Boltzina:
 
         with open(mol_dir / f"{ligand_name}.pkl", "wb") as f:
             pickle.dump({"MOL": mol}, f)
-        self.ccd["MOL"] = mol
+        ccd = copy.deepcopy(self.ccd)
+        ccd["MOL"] = mol
+        return ccd
+
+    def _prepare_structure(self, complex_file: Path, pose_idx: str, ligand_idx: int, ccd: Dict[str, Any]) -> Optional[Path]:
+        """Prepare structure by parsing MMCIF and saving structure data"""
+        pose_output_dir = self.output_dir / str(ligand_idx) / "boltz_out" / str(pose_idx) / self.fname
+        pose_output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Parse MMCIF structure
+            parsed_structure = parse_mmcif(
+                path=str(complex_file),
+                mols=ccd,
+                call_compute_interfaces=False
+            )
+
+            # Save structure data
+            structure_v2 = parsed_structure.data
+            output_path = pose_output_dir / f"pre_affinity_{self.fname}.npz"
+            structure_v2.dump(output_path)
+
+            return pose_output_dir
+
+        except Exception as e:
+            print(f"Error preparing structure for pose {pose_idx}: {e}")
+            return None
 
     def _score_poses(self, ligand_idx: int, ligand_output_dir: Path, ligand_name: str) -> None:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
-        boltz_output_dir = ligand_output_dir / "boltz_out"
-        boltz_output_dir.mkdir(exist_ok=True, parents=True)
         work_dir = self.work_dir or "boltz_results_base_config"
+
+        # Get copied CCD for this ligand
+        ccd = self._update_ccd_for_ligand(ligand_output_dir, ligand_name)
 
         # Find all processed poses
         complex_files = list(docked_ligands_dir.glob("*_B_complex_fix.cif"))
@@ -228,26 +262,26 @@ class Boltzina:
         for complex_file in complex_files:
             # Extract pose index
             pose_idx = complex_file.stem.split("_")[2]  # docked_ligand_{pose_idx}_B_complex_fix
-            fname = f"{ligand_idx}_{pose_idx}"
-            if (boltz_output_dir / fname / f"affinity_base.json").exists() and not self.boltz_override:
-                print(f"Skipping Boltzina scoring for {fname} because it already exists")
-                continue
-            try:
-                with open(self.work_dir / "processed" / "manifest.json", "r") as f:
-                    manifest = json.load(f)
-                manifest["records"][0]["id"] = fname
-                manifest_path = boltz_output_dir / fname / f"manifest.json"
-                with open(manifest_path, "w") as f:
-                    json.dump(manifest, f)
 
-                # Run Boltzina scoring and get predictions
-                predictions = calc_from_data(
-                    cif_path=str(complex_file),
-                    output_dir=str(boltz_output_dir),
-                    fname=fname,
-                    ccd=self.ccd,
-                    work_dir=work_dir,
+            # Create pose-specific output directory with new structure
+            pose_output_dir = self.output_dir / str(ligand_idx) / "boltz_out" / str(pose_idx) / self.fname
+
+            if (pose_output_dir / f"affinity_{self.fname}.json").exists() and not self.boltz_override:
+                print(f"Skipping Boltzina scoring for pose {pose_idx} because it already exists")
+                continue
+
+            try:
+                # Prepare structure
+                prepared_dir = self._prepare_structure(complex_file, pose_idx, ligand_idx, ccd)
+                if prepared_dir is None:
+                    continue
+                output_dir = prepared_dir.parent
+                # Run Boltzina scoring directly with predict_affinity
+                predictions = predict_affinity(
+                    work_dir,
                     model_module=self.boltz_model,
+                    output_dir=str(output_dir),  # boltz_out directory
+                    structures_dir=str(output_dir)
                 )
 
                 # Extract affinity results from predictions
