@@ -122,8 +122,13 @@ class Boltzina:
 
             prep_tasks.append((idx, ligand_path, ligand_format, ligand_output_dir))
         print(f"Docking {len(ligand_files)} ligands with {self.num_workers} workers...")
-        with Pool(self.num_workers) as pool:
-            pool.map(self._prepare_ligand, prep_tasks)
+
+        if self.num_workers == 1:
+            for task in prep_tasks:
+                self._prepare_ligand(task)
+        else:
+            with Pool(self.num_workers) as pool:
+                pool.map(self._prepare_ligand, prep_tasks)
 
         print("Preparing structures for scoring...")
         structure_tasks = []
@@ -140,8 +145,15 @@ class Boltzina:
                 structure_tasks.append((complex_file, pose_idx, idx))
 
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
-        with Pool(self.num_workers) as pool:
-            prepared_dirs = pool.map(self._prepare_structure_parallel, structure_tasks)
+
+        if self.num_workers == 1:
+            prepared_dirs = []
+            for task in structure_tasks:
+                result = self._prepare_structure_parallel(task)
+                prepared_dirs.append(result)
+        else:
+            with Pool(self.num_workers) as pool:
+                prepared_dirs = pool.map(self._prepare_structure_parallel, structure_tasks)
 
         print("Scoring poses with Boltzina...")
         # Execute scoring with torch multiprocessing
@@ -337,9 +349,15 @@ class Boltzina:
                             scoring_tasks.append((idx, pose_idx, ligand_path.stem, ligand_output_dir))
 
         # Use torch multiprocessing for GPU-intensive scoring
-        mp.set_start_method('spawn', force=True)
-        with mp.Pool(self.batch_size) as pool:
-            results = pool.map(self._score_single_pose, scoring_tasks)
+        if batch_size == 1:
+            results = []
+            for task in scoring_tasks:
+                result = self._score_single_pose(task)
+                results.append(result)
+        else:
+            mp.set_start_method('spawn', force=True)
+            with mp.Pool(batch_size) as pool:
+                results = pool.map(self._score_single_pose, scoring_tasks)
 
         # Collect results
         for result in results:
