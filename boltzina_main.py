@@ -25,7 +25,7 @@ def init_worker():
 
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -39,6 +39,7 @@ class Boltzina:
         self.results = []
         self.num_boltz_poses = num_boltz_poses
         self.pose_idxs = [str(pose_idx) for pose_idx in range(1, self.num_boltz_poses + 1)]
+        self.input_ligand_name = input_ligand_name
         self.base_ligand_name = base_ligand_name
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,14 +119,14 @@ class Boltzina:
             manifest = json.load(f)
         return manifest["records"][0]["id"]
 
-    def run(self, ligand_files: List[str], ligand_format: str = "sdf") -> None:
+    def run(self, ligand_files: List[str]) -> None:
         prep_tasks = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
             ligand_output_dir = self.output_dir / str(idx)
             ligand_output_dir.mkdir(parents=True, exist_ok=True)
 
-            prep_tasks.append((idx, ligand_path, ligand_format, ligand_output_dir))
+            prep_tasks.append((idx, ligand_path, ligand_output_dir))
         print(f"Docking {len(ligand_files)} ligands with {self.num_workers} workers...")
 
         if self.num_workers == 1:
@@ -166,11 +167,11 @@ class Boltzina:
 
     def _prepare_ligand(self, task_data):
         """Prepare ligand task for multiprocessing"""
-        idx, ligand_path, ligand_format, ligand_output_dir = task_data
+        idx, ligand_path, ligand_output_dir = task_data
 
         # Convert ligand to PDBQT format if needed
         ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
-        self._convert_to_pdbqt(ligand_path, ligand_pdbqt, ligand_format)
+        self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
 
         # Run Vina docking
         docked_pdbqt = ligand_output_dir / "docked.pdbqt"
@@ -188,14 +189,11 @@ class Boltzina:
         complex_file, pose_idx, ligand_idx = task_data
         return self._prepare_structure(complex_file, pose_idx, ligand_idx)
 
-    def _convert_to_pdbqt(self, input_file: Path, output_file: Path, input_format: str) -> None:
+    def _convert_to_pdbqt(self, input_file: Path, output_file: Path) -> None:
         if output_file.exists() and not self.vina_override:
             return
-        if input_format.lower() in ["sdf", "mol2", "smi"]:
-            cmd = ["obabel", str(input_file), "-O", str(output_file)]
-            subprocess.run(cmd, check=True)
-        else:
-            raise ValueError(f"Unsupported ligand format: {input_format}")
+        cmd = ["obabel", str(input_file), "-O", str(output_file)]
+        subprocess.run(cmd, check=True)
 
     def _run_vina(self, ligand_pdbqt: Path, output_pdbqt: Path) -> None:
         if output_pdbqt.exists() and not self.vina_override:
@@ -251,7 +249,7 @@ class Boltzina:
         complex_fix_cif = docked_ligands_dir / f"{base_name}_B_complex_fix.cif"
 
         # Process with pdb_chain and pdb_rplresname
-        cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"<0>\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
+        cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
         subprocess.run(cmd1, shell=True, check=True)
 
         # Merge with receptor
@@ -479,7 +477,6 @@ def main():
     parser.add_argument("--output_dir", required=True, help="Output directory")
     parser.add_argument("--config", required=True, help="Vina config file")
     parser.add_argument("--exhaustiveness", type=int, default=8, help="Vina exhaustiveness parameter")
-    parser.add_argument("--ligand_format", default="sdf", help="Ligand file format")
     parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
     parser.add_argument("--work_dir", help="Working directory for Boltz results")
     parser.add_argument("--vina_override", action="store_true", help="Override existing Vina output directory")
@@ -505,7 +502,7 @@ def main():
     )
 
     # Run the pipeline
-    boltzina.run(args.ligands, args.ligand_format)
+    boltzina.run(args.ligands)
 
     # Save results
     boltzina.save_results_csv()
