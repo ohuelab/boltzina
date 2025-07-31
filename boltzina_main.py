@@ -25,11 +25,10 @@ def init_worker():
 
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, exhaustiveness: int = 8, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
-        self.exhaustiveness = exhaustiveness
         self.mgl_path = Path(mgl_path)
         self.work_dir = Path(work_dir)
         self.vina_override = vina_override
@@ -52,7 +51,13 @@ class Boltzina:
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = self._load_ccd()
 
-        self.fname = self._get_fname()
+        manifest_path = self.work_dir / "processed" / "manifest.json"
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+        self.manifest = manifest
+
+        self.fname = self._get_fname() if fname is None else fname
+        print("self.fname: ", self.fname)
 
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
@@ -114,10 +119,7 @@ class Boltzina:
             return {}
 
     def _get_fname(self) -> str:
-        manifest_path = self.work_dir / "processed" / "manifest.json"
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-        return manifest["records"][0]["id"]
+        return self.manifest["records"][0]["id"]
 
     def run(self, ligand_files: List[str]) -> None:
         prep_tasks = []
@@ -177,12 +179,14 @@ class Boltzina:
         docked_pdbqt = ligand_output_dir / "docked.pdbqt"
         self._run_vina(ligand_pdbqt, docked_pdbqt)
 
-        # Update CCD for ligand
-        self._update_ccd_for_ligand(ligand_output_dir)
-
         # Preprocess docked structures
         self._preprocess_docked_structures(idx, docked_pdbqt)
 
+        # Update CCD for ligand
+        self._update_ccd_for_ligand(ligand_output_dir)
+
+        # Update manifest
+        self._update_manifest(ligand_output_dir)
 
     def _prepare_structure_parallel(self, task_data):
         """Prepare structure task for multiprocessing"""
@@ -205,7 +209,6 @@ class Boltzina:
             "--ligand", str(ligand_pdbqt),
             "--out", str(output_pdbqt),
             "--config", str(self.config),
-            "--exhaustiveness", str(self.exhaustiveness)
         ]
         subprocess.run(cmd, check=True)
 
@@ -282,7 +285,6 @@ class Boltzina:
 
         # Use the first pose to set up CCD
         first_pdb = next(f for f in pdb_files if not f.name.endswith("_prep.pdb") and not f.name.endswith("_complex.pdb"))
-
         mol = Chem.MolFromPDBFile(str(first_pdb))
         if mol is None:
             return
@@ -297,8 +299,16 @@ class Boltzina:
             pickle.dump({self.base_ligand_name: mol}, f)
         with open(extra_mols_dir / f"{self.base_ligand_name}.pkl", "wb") as f:
             pickle.dump(mol, f)
+        return
 
-        return None
+    def _update_manifest(self, ligand_output_dir: Path) -> None:
+        if (ligand_output_dir / "boltz_out" / f"manifest.json").exists() and not self.boltz_override:
+            return
+        manifest = copy.deepcopy(self.manifest)
+        record = [record for record in manifest["records"] if record["id"] == self.fname][0]
+        manifest["records"] = [record]
+        with open(ligand_output_dir / "boltz_out" / f"manifest.json", "w") as f:
+            json.dump(manifest, f, indent=4)
 
     def _prepare_structure(self, complex_file: Path, pose_idx: str, ligand_idx: int) -> Optional[Path]:
         """Prepare structure by parsing MMCIF and saving structure data"""
@@ -391,6 +401,7 @@ class Boltzina:
             output_dir=str(output_dir),  # boltz_out directory
             structures_dir=str(output_dir),
             extra_mols_dir=extra_mols_dir,
+            manifest_path = self.output_dir / str(ligand_idx) / "boltz_out" / "manifest.json",
             num_workers=0
         )
 
@@ -476,7 +487,6 @@ def main():
     parser.add_argument("--ligands", required=True, nargs="+", help="Ligand files (SDF/MOL2/SMI)")
     parser.add_argument("--output_dir", required=True, help="Output directory")
     parser.add_argument("--config", required=True, help="Vina config file")
-    parser.add_argument("--exhaustiveness", type=int, default=8, help="Vina exhaustiveness parameter")
     parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
     parser.add_argument("--work_dir", help="Working directory for Boltz results")
     parser.add_argument("--vina_override", action="store_true", help="Override existing Vina output directory")
@@ -491,7 +501,6 @@ def main():
         receptor_pdb=args.receptor,
         output_dir=args.output_dir,
         config=args.config,
-        exhaustiveness=args.exhaustiveness,
         mgl_path=args.mgl_path,
         work_dir=args.work_dir,
         vina_override=args.vina_override,

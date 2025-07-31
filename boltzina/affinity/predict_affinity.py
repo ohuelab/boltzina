@@ -70,9 +70,10 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
 
     return model_module
 
-def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None, batch_size=1):
+def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest_path = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None, batch_size=1):
     if batch_size > 1:
         raise ValueError("Boltz2InferenceDataModule does not support batch_size > 1. Support will be added in the future.")
+
     out_dir = Path(out_dir)
     output_dir = Path(output_dir)
     structures_dir = Path(structures_dir)
@@ -100,7 +101,7 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
     constraints_dir = out_dir/"processed"/"constraints" if constraints_dir is None else constraints_dir
     template_dir = out_dir/"processed"/"templates" if template_dir is None else template_dir
 
-    manifest = Manifest.load(out_dir / "processed" / "manifest.json" if manifest is None else manifest)
+    manifest = Manifest.load(out_dir / "processed" / "manifest.json" if manifest_path is None else manifest_path)
 
     output_dir = out_dir / "predictions" if output_dir is None else output_dir
     extra_mols_dir = output_dir / "mols" if extra_mols_dir is None else Path(extra_mols_dir)
