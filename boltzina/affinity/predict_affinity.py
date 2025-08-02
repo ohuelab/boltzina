@@ -2,11 +2,12 @@
 from pathlib import Path
 from dataclasses import asdict
 from boltz.main import Boltz2DiffusionParams, PairformerArgsV2, MSAModuleArgs, get_cache_path
-from boltz.model.models.boltz2 import Boltz2
 from pytorch_lightning import Trainer, seed_everything
-from boltzina.affinity.inferencev2 import Boltz2InferenceDataModule
-from boltz.data.write.writer import BoltzAffinityWriter
 from boltz.data.types import Manifest
+
+from boltzina.model.models.boltz2 import Boltz2
+from boltzina.data.module.inferencev2 import Boltz2InferenceDataModule
+from boltzina.data.write.writer import BoltzAffinityWriter
 
 def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False):
     """Load and return a Boltz2 model for affinity prediction.
@@ -71,8 +72,6 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
     return model_module
 
 def predict_affinity(out_dir, model_module=None, output_dir = None, structures_dir = None, msa_dir = None, constraints_dir = None, template_dir = None, extra_mols_dir = None, manifest_path = None, affinity_checkpoint = None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, override=False, num_workers=1, strategy="auto", accelerator="gpu", devices=1, affinity_mw_correction=False, seed=None, batch_size=1):
-    if batch_size > 1:
-        raise ValueError("Boltz2InferenceDataModule does not support batch_size > 1. Support will be added in the future.")
 
     out_dir = Path(out_dir)
     output_dir = Path(output_dir)

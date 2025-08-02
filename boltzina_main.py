@@ -183,7 +183,7 @@ class Boltzina:
         self._preprocess_docked_structures(idx, docked_pdbqt)
 
         # Update CCD for ligand
-        self._update_ccd_for_ligand(ligand_output_dir)
+        self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
 
         # Update manifest
         self._update_manifest(ligand_output_dir)
@@ -271,23 +271,15 @@ class Boltzina:
         ]
         subprocess.run(cmd4, check=True)
 
-    def _update_ccd_for_ligand(self, ligand_output_dir: Path) -> None:
+    def _update_ccd_for_ligand(self, ligand_output_dir: Path, ligand_path: Optional[Path] = None):
         extra_mols_dir = ligand_output_dir / "boltz_out" / "mols"
         extra_mols_dir.mkdir(exist_ok=True, parents=True)
         if (extra_mols_dir / f"{self.base_ligand_name}.pkl").exists() and not self.vina_override:
             return
 
-        docked_ligands_dir = ligand_output_dir / "docked_ligands"
-        # Find the first docked ligand PDB file
-        pdb_files = list(docked_ligands_dir.glob("docked_ligand_*.pdb"))
-        if not pdb_files:
-            return
-
-        # Use the first pose to set up CCD
-        first_pdb = next(f for f in pdb_files if not f.name.endswith("_prep.pdb") and not f.name.endswith("_complex.pdb"))
-        mol = Chem.MolFromPDBFile(str(first_pdb))
+        mol = Chem.MolFromPDBFile(ligand_path)
         if mol is None:
-            return
+            raise ValueError(f"Failed to read PDB file {ligand_path}")
 
         for atom in mol.GetAtoms():
             pdb_info = atom.GetPDBResidueInfo()
@@ -337,7 +329,7 @@ class Boltzina:
             return pose_output_dir
 
         except Exception as e:
-            print(f"Error preparing structure for pose {pose_idx}: {e}")
+            print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
             return None
 
     def _score_poses_parallel(self, ligand_files: List[str], batch_size: int) -> None:
@@ -395,15 +387,19 @@ class Boltzina:
         output_dir = pose_output_dir.parent
         extra_mols_dir = self.output_dir / str(ligand_idx) / "boltz_out" / "mols"
         # Run Boltzina scoring directly with predict_affinity
-        predictions = predict_affinity(
-            work_dir,
-            model_module=boltz_model,
-            output_dir=str(output_dir),  # boltz_out directory
-            structures_dir=str(output_dir),
-            extra_mols_dir=extra_mols_dir,
-            manifest_path = self.output_dir / str(ligand_idx) / "boltz_out" / "manifest.json",
-            num_workers=0
-        )
+        try:
+            predictions = predict_affinity(
+                work_dir,
+                model_module=boltz_model,
+                output_dir=str(output_dir),  # boltz_out directory
+                structures_dir=str(output_dir),
+                extra_mols_dir=extra_mols_dir,
+                manifest_path = self.output_dir / str(ligand_idx) / "boltz_out" / "manifest.json",
+                num_workers=0
+            )
+        except Exception as e:
+            print(f"Error scoring pose {pose_idx} for ligand {ligand_name}: {e}")
+            return None
 
         # Extract affinity results from predictions
         if predictions and len(predictions) > 0:
