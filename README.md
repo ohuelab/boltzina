@@ -1,24 +1,48 @@
 # Boltzina
 
-Boltzina is a pipeline that combines AutoDock Vina docking with Boltz scoring for molecular docking and affinity prediction.
+Boltzina is a pipeline that combines AutoDock Vina docking with Boltz-2 scoring for molecular docking and affinity prediction.
 
 ## Usage
 
+Run the pipeline using a configuration file:
+
 ```bash
-python boltzina_main.py \
-    --receptor test_data/KIF11/docking/receptor.pdbqt \
-    --ligands test_data/KIF11/active_mols/CHEMBL1163892.sdf \
-    --output_dir example_output \
-    --config test_data/KIF11/docking/input.txt \
-    --exhaustiveness 8 \
-    --ligand_format sdf
+python run.py sample/CDK2/config.json
 ```
 
-## Parameters
+## Command Line Options
 
-- `--receptor`: Receptor PDBQT file
-- `--ligands`: Ligand files (SDF/MOL2/SMI format)
-- `--output_dir`: Output directory for results
-- `--config`: Vina config file (required - contains binding site coordinates)
-- `--exhaustiveness`: Vina exhaustiveness parameter (default: 8)
-- `--ligand_format`: Ligand file format (default: sdf)
+- `config`: Path to configuration JSON file (required)
+- `--batch_size`: Batch size for Boltz-2 scoring (default: 1, strongly recommended)
+- `--num_workers`: Number of workers for AutoDock Vina (default: 1)
+- `--vina_override`: Override existing AutoDock Vina results
+- `--boltz_override`: Override existing Boltz-2 scoring results
+
+## Configuration File Format
+
+The configuration file should be a JSON file with the following required fields:
+
+```json
+{
+    "work_dir": "sample/CDK2/boltz_results_base",
+    "vina_config": "sample/CDK2/input.txt",
+    "fname": "1ckp_cdk2",
+    "input_ligand_name": "UNL",
+    "output_dir": "sample/CDK2/results",
+    "receptor_pdb": "sample/CDK2/boltz_results_base/predictions/1ckp_cdk2/1ckp_cdk2_model_0_protein.pdb",
+    "ligand_files": [
+        "sample/CDK2/input_pdbs/CDK2_active_0.pdb",
+        "sample/CDK2/input_pdbs/CDK2_active_1.pdb"
+    ]
+}
+```
+
+### Configuration Parameters
+
+- **`work_dir`**: Working directory for intermediate files
+- **`vina_config`**: Path to AutoDock Vina configuration file (contains binding site coordinates)
+- **`fname`**: Base filename for output files
+- **`input_ligand_name`**: Name of the ligand in the input files
+- **`output_dir`**: Directory where final results will be saved
+- **`receptor_pdb`**: Path to the receptor PDB file
+- **`ligand_files`**: Array of paths to ligand files (Now only supports PDB format)
