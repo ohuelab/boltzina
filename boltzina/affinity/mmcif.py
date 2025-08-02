@@ -114,10 +114,10 @@ def get_mol(ccd: str, mols: dict, moldir: str) -> Mol:
         mol = load_molecules(moldir, [ccd])[ccd]
 
         # Add to resource
-        if isinstance(mols, dict):
-            mols[ccd] = mol
-        else:
-            mols.set(ccd, mol)
+        # if isinstance(mols, dict):
+        #     mols[ccd] = mol
+        # else:
+        #     mols.set(ccd, mol)
 
     return mol
 
