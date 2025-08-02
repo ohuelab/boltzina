@@ -1,0 +1,107 @@
+HEADER                                                                          
+COMPND    MOL_ID: 1;                                                            
+COMPND   2 MOLECULE:;                                                           
+COMPND   3 CHAIN: A;                                                            
+COMPND   4 ENGINEERED: YES                                                      
+SOURCE    MOL_ID: 1                                                             
+REMARK   2                                                                      
+REMARK   2 RESOLUTION. NOT APPLICABLE.                                          
+REMARK   4                                                                      
+REMARK   4 NULL COMPLIES WITH FORMAT V. 3.30, 13-JUL-11                         
+REMARK 250                                                                      
+REMARK 250 EXPERIMENTAL DETAILS                                                 
+REMARK 250  EXPERIMENT TYPE                : NULL                               
+REMARK 250  DATE OF DATA COLLECTION        : NULL                               
+REMARK 250                                                                      
+REMARK 250 REMARK: NULL                                                         
+SEQRES   1 A  298  MET GLU ASN PHE GLN LYS VAL GLU LYS ILE GLY GLU GLY          
+SEQRES   2 A  298  THR TYR GLY VAL VAL TYR LYS ALA ARG ASN LYS LEU THR          
+SEQRES   3 A  298  GLY GLU VAL VAL ALA LEU LYS LYS ILE ARG LEU ASP THR          
+SEQRES   4 A  298  GLU THR GLU GLY VAL PRO SER THR ALA ILE ARG GLU ILE          
+SEQRES   5 A  298  SER LEU LEU LYS GLU LEU ASN HIS PRO ASN ILE VAL LYS          
+SEQRES   6 A  298  LEU LEU ASP VAL ILE HIS THR GLU ASN LYS LEU TYR LEU          
+SEQRES   7 A  298  VAL PHE GLU PHE LEU HIS GLN ASP LEU LYS LYS PHE MET          
+SEQRES   8 A  298  ASP ALA SER ALA LEU THR GLY ILE PRO LEU PRO LEU ILE          
+SEQRES   9 A  298  LYS SER TYR LEU PHE GLN LEU LEU GLN GLY LEU ALA PHE          
+SEQRES  10 A  298  CYS HIS SER HIS ARG VAL LEU HIS ARG ASP LEU LYS PRO          
+SEQRES  11 A  298  GLN ASN LEU LEU ILE ASN THR GLU GLY ALA ILE LYS LEU          
+SEQRES  12 A  298  ALA ASP PHE GLY LEU ALA ARG ALA PHE GLY VAL PRO VAL          
+SEQRES  13 A  298  ARG THR TYR THR HIS GLU VAL VAL THR LEU TRP TYR ARG          
+SEQRES  14 A  298  ALA PRO GLU ILE LEU LEU GLY CYS LYS TYR TYR SER THR          
+SEQRES  15 A  298  ALA VAL ASP ILE TRP SER LEU GLY CYS ILE PHE ALA GLU          
+SEQRES  16 A  298  MET VAL THR ARG ARG ALA LEU PHE PRO GLY ASP SER GLU          
+SEQRES  17 A  298  ILE ASP GLN LEU PHE ARG ILE PHE ARG THR LEU GLY THR          
+SEQRES  18 A  298  PRO ASP GLU VAL VAL TRP PRO GLY VAL THR SER MET PRO          
+SEQRES  19 A  298  ASP TYR LYS PRO SER PHE PRO LYS TRP ALA ARG GLN ASP          
+SEQRES  20 A  298  PHE SER LYS VAL VAL PRO PRO LEU ASP GLU ASP GLY ARG          
+SEQRES  21 A  298  SER LEU LEU SER GLN MET LEU HIS TYR ASP PRO ASN LYS          
+SEQRES  22 A  298  ARG ILE SER ALA LYS ALA ALA LEU ALA HIS PRO PHE PHE          
+SEQRES  23 A  298  GLN ASP VAL THR LYS PRO VAL PRO HIS LEU ARG LEU              
+HET    IG1  B   1      30                                                       
+FORMUL   2  IG1                                                                 
+CRYST1    1.000    1.000    1.000  90.00  90.00  90.00 P 1           1          
+ORIGX1      1.000000  0.000000  0.000000        0.00000                         
+ORIGX2      0.000000  1.000000  0.000000        0.00000                         
+ORIGX3      0.000000  0.000000  1.000000        0.00000                         
+HETATM 2399  C50 IG1 B   1       9.276  -7.471  -7.842  1.00 80.40           C  
+HETATM 2400  C54 IG1 B   1       9.347  -6.313  -6.833  1.00 87.48           C  
+HETATM 2401  C51 IG1 B   1      10.635  -5.518  -7.014  1.00 81.39           C  
+HETATM 2402  C55 IG1 B   1       9.156  -6.842  -5.437  1.00 88.32           C  
+HETATM 2403  C53 IG1 B   1       7.698  -6.638  -4.981  1.00 85.37           C  
+HETATM 2404  O32 IG1 B   1       7.448  -5.249  -4.872  1.00 79.87           O  
+HETATM 2405  N46 IG1 B   1      10.034  -6.183  -4.439  1.00 94.23           N  
+HETATM 2406  C34 IG1 B   1      10.580  -6.896  -3.414  1.00 96.73           C  
+HETATM 2407  N28 IG1 B   1      10.447  -8.224  -3.450  1.00 96.90           N  
+HETATM 2408  C41 IG1 B   1      10.922  -9.000  -2.451  1.00 97.75           C  
+HETATM 2409  N45 IG1 B   1      10.794 -10.363  -2.488  1.00 97.35           N  
+HETATM 2410  C40 IG1 B   1      10.283 -11.119  -3.546  1.00 96.84           C  
+HETATM 2411  C36 IG1 B   1      10.951 -12.276  -3.889  1.00 95.22           C  
+HETATM 2412  C35 IG1 B   1      10.502 -13.091  -4.934  1.00 94.42           C  
+HETATM 2413  C39 IG1 B   1       9.364 -12.746  -5.641  1.00 93.77           C  
+HETATM 2414  C33 IG1 B   1       8.904 -13.635  -6.762  1.00 91.59           C  
+HETATM 2415  O26 IG1 B   1       7.752 -14.075  -6.773  1.00 80.86           O  
+HETATM 2416  O31 IG1 B   1       9.733 -13.958  -7.633  1.00 79.92           O  
+HETATM 2417  C38 IG1 B   1       8.672 -11.568  -5.330  1.00 93.93           C  
+HETATM 2418 CL27 IG1 B   1       7.253 -11.050  -6.191  1.00 92.55          CL  
+HETATM 2419  C37 IG1 B   1       9.139 -10.749  -4.267  1.00 94.88           C  
+HETATM 2420  C43 IG1 B   1      11.569  -8.378  -1.363  1.00 97.97           C  
+HETATM 2421  N29 IG1 B   1      12.145  -8.826  -0.220  1.00 98.22           N  
+HETATM 2422  C42 IG1 B   1      12.603  -7.765   0.432  1.00 98.05           C  
+HETATM 2423  N47 IG1 B   1      12.347  -6.624  -0.256  1.00 97.69           N  
+HETATM 2424  C52 IG1 B   1      12.748  -5.251   0.174  1.00 97.28           C  
+HETATM 2425  C48 IG1 B   1      11.525  -4.453   0.640  1.00 92.39           C  
+HETATM 2426  C49 IG1 B   1      13.579  -4.533  -0.894  1.00 93.58           C  
+HETATM 2427  C44 IG1 B   1      11.690  -6.967  -1.390  1.00 97.71           C  
+HETATM 2428  N30 IG1 B   1      11.198  -6.225  -2.402  1.00 96.80           N  
+CONECT 2399 2400                                                                
+CONECT 2400 2399 2401 2402                                                      
+CONECT 2401 2400                                                                
+CONECT 2402 2400 2403 2405                                                      
+CONECT 2403 2402 2404                                                           
+CONECT 2404 2403                                                                
+CONECT 2405 2402 2406                                                           
+CONECT 2406 2405 2407 2428                                                      
+CONECT 2407 2406 2408                                                           
+CONECT 2408 2407 2409 2420                                                      
+CONECT 2409 2408 2410                                                           
+CONECT 2410 2409 2411 2419                                                      
+CONECT 2411 2410 2412                                                           
+CONECT 2412 2411 2413                                                           
+CONECT 2413 2412 2414 2417                                                      
+CONECT 2414 2413 2415 2416                                                      
+CONECT 2415 2414                                                                
+CONECT 2416 2414                                                                
+CONECT 2417 2413 2418 2419                                                      
+CONECT 2418 2417                                                                
+CONECT 2419 2410 2417                                                           
+CONECT 2420 2408 2421 2427                                                      
+CONECT 2421 2420 2422                                                           
+CONECT 2422 2421 2423                                                           
+CONECT 2423 2422 2424 2427                                                      
+CONECT 2424 2423 2425 2426                                                      
+CONECT 2425 2424                                                                
+CONECT 2426 2424                                                                
+CONECT 2427 2420 2423 2428                                                      
+CONECT 2428 2406 2427                                                           
+MASTER       10    0    1    0    0    0    0    3 2427    1   30   23          
+END                                                                             

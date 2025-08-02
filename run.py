@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+import json
+import argparse
+from boltzina_main import Boltzina
+from pathlib import Path
+
+MGL_PATH = "/PATH/TO/mgltools_x86_64Linux2_1.5.7"
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config", type=str)
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for Boltz-2 Scoring, batch_size = 1 is strongly recommended")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for AutoDock Vina")
+    parser.add_argument("--vina_override", action="store_true", help="Override results of AutoDock Vina")
+    parser.add_argument("--boltz_override", action="store_true", help="Override results of Boltz-2 Scoring")
+    args = parser.parse_args()
+    with open(args.config, "r") as f:
+        config_dict = json.load(f)
+    receptor_pdb = config_dict["receptor_pdb"]
+    ligand_files = config_dict["ligand_files"]
+    output_dir = config_dict["output_dir"]
+    work_dir = config_dict["work_dir"]
+    config = config_dict["vina_config"]
+    input_ligand_name = config_dict["input_ligand_name"]
+    fname = config_dict["fname"]
+
+    boltzina = Boltzina(
+        receptor_pdb=receptor_pdb,
+        output_dir=output_dir,
+        config=config,
+        mgl_path=MGL_PATH,
+        work_dir=work_dir,
+        input_ligand_name=input_ligand_name,
+        fname=fname,
+        vina_override=args.vina_override,
+        boltz_override=args.boltz_override,
+        num_workers=args.num_workers,
+        batch_size=args.batch_size,
+    )
+
+    boltzina.run(ligand_files)
+
+    print("Saving results to CSV...")
+    boltzina.save_results_csv()
+
+    df = boltzina.get_results_dataframe()
+    print(df)
+
+if __name__ == "__main__":
+    main()

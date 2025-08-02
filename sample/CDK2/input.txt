@@ -1,0 +1,9 @@
+center_x = 7.088
+center_y = -4.921
+center_z = 7.519
+size_x = 20
+size_y = 20
+size_z = 20
+num_modes = 1
+seed = 1
+cpu = 1

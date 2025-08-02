@@ -10,6 +10,7 @@ from multiprocessing import Pool
 import torch.multiprocessing as mp
 import pandas as pd
 from rdkit import Chem
+import shutil
 Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
 from boltzina.affinity.mmcif import parse_mmcif
@@ -17,12 +18,6 @@ from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affini
 from boltz.main import get_cache_path
 
 boltz_model = None
-
-def init_worker():
-    global boltz_model
-    print(f"Initializing model for worker process: {os.getpid()}")
-    boltz_model = load_boltz2_model()
-
 
 class Boltzina:
     def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None):
@@ -57,7 +52,7 @@ class Boltzina:
         self.manifest = manifest
 
         self.fname = self._get_fname() if fname is None else fname
-        print("self.fname: ", self.fname)
+        self.boltz_model = load_boltz2_model()
 
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
@@ -125,7 +120,7 @@ class Boltzina:
         prep_tasks = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
-            ligand_output_dir = self.output_dir / str(idx)
+            ligand_output_dir = self.output_dir / "out" / str(idx)
             ligand_output_dir.mkdir(parents=True, exist_ok=True)
 
             prep_tasks.append((idx, ligand_path, ligand_output_dir))
@@ -140,20 +135,23 @@ class Boltzina:
 
         print("Preparing structures for scoring...")
         structure_tasks = []
+        record_ids = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
-            ligand_output_dir = self.output_dir / str(idx)
+            ligand_output_dir = self.output_dir / "out" / str(idx)
             docked_ligands_dir = ligand_output_dir / "docked_ligands"
             complex_files = list(docked_ligands_dir.glob("*_B_complex_fix.cif"))
 
             for complex_file in complex_files:
                 pose_idx = complex_file.stem.split("_")[2]
+                record_ids.append(f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}")
                 if str(pose_idx) not in self.pose_idxs:
                     continue
                 structure_tasks.append((complex_file, pose_idx, idx))
 
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
-
+        self._update_manifest(record_ids)
+        self._link_constraints(record_ids)
         if self.num_workers == 1:
             prepared_dirs = []
             for task in structure_tasks:
@@ -165,7 +163,8 @@ class Boltzina:
 
         print("Scoring poses with Boltzina...")
         # Execute scoring with torch multiprocessing
-        self._score_poses_parallel(ligand_files, self.batch_size)
+        self._score_poses()
+        self._extract_results(ligand_files)
 
     def _prepare_ligand(self, task_data):
         """Prepare ligand task for multiprocessing"""
@@ -184,9 +183,6 @@ class Boltzina:
 
         # Update CCD for ligand
         self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
-
-        # Update manifest
-        self._update_manifest(ligand_output_dir)
 
     def _prepare_structure_parallel(self, task_data):
         """Prepare structure task for multiprocessing"""
@@ -213,7 +209,7 @@ class Boltzina:
         subprocess.run(cmd, check=True)
 
     def _preprocess_docked_structures(self, ligand_idx: int, docked_pdbqt: Path) -> None:
-        ligand_output_dir = self.output_dir / str(ligand_idx)
+        ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
         docked_ligands_dir.mkdir(exist_ok=True)
         complex_fix_cifs = [
@@ -242,7 +238,7 @@ class Boltzina:
             self._process_pose(ligand_idx, pose_idx, pdb_file)
 
     def _process_pose(self, ligand_idx: int, pose_idx: str, pdb_file: Path) -> None:
-        ligand_output_dir = self.output_dir / str(ligand_idx)
+        ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
 
         base_name = f"docked_ligand_{pose_idx}"
@@ -272,10 +268,20 @@ class Boltzina:
         subprocess.run(cmd4, check=True)
 
     def _update_ccd_for_ligand(self, ligand_output_dir: Path, ligand_path: Optional[Path] = None):
+        base_extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
+        base_extra_mols_dir.mkdir(exist_ok=True, parents=True)
         extra_mols_dir = ligand_output_dir / "boltz_out" / "mols"
         extra_mols_dir.mkdir(exist_ok=True, parents=True)
+
         if (extra_mols_dir / f"{self.base_ligand_name}.pkl").exists() and not self.vina_override:
-            return
+            all_exist = True
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
+                if not (base_extra_mols_dir / f"{fname}.pkl").exists():
+                    all_exist = False
+                    break
+            if all_exist:
+                return
 
         mol = Chem.MolFromPDBFile(ligand_path)
         if mol is None:
@@ -286,28 +292,47 @@ class Boltzina:
             if pdb_info:
                 atom_name = pdb_info.GetName().strip().upper()
                 atom.SetProp("name", atom_name)
-
-        with open(extra_mols_dir / f"{self.fname}.pkl", "wb") as f:
-            pickle.dump({self.base_ligand_name: mol}, f)
+        for pose_idx in self.pose_idxs:
+            fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
+            with open(base_extra_mols_dir / f"{fname}.pkl", "wb") as f:
+                pickle.dump({self.base_ligand_name: mol}, f)
         with open(extra_mols_dir / f"{self.base_ligand_name}.pkl", "wb") as f:
             pickle.dump(mol, f)
         return
 
-    def _update_manifest(self, ligand_output_dir: Path) -> None:
-        if (ligand_output_dir / "boltz_out" / f"manifest.json").exists() and not self.boltz_override:
+    def _link_constraints(self, record_ids: List[str]) -> None:
+        source_constraints_file = self.work_dir / "processed" / "constraints" / f"{self.fname}.npz"
+        target_constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
+        target_constraints_dir.mkdir(exist_ok=True, parents=True)
+        for record_id in record_ids:
+            target_constraints_file = target_constraints_dir / f"{record_id}.npz"
+            if not target_constraints_file.exists():
+                shutil.copy(source_constraints_file, target_constraints_file)
+        return
+
+    def _update_manifest(self, record_ids: List[str]) -> None:
+        if (self.output_dir / "boltz_out" / "processed" / f"manifest.json").exists() and not self.boltz_override:
             return
         manifest = copy.deepcopy(self.manifest)
         record = [record for record in manifest["records"] if record["id"] == self.fname][0]
-        manifest["records"] = [record]
-        with open(ligand_output_dir / "boltz_out" / f"manifest.json", "w") as f:
+        manifest["records"] = []
+        for record_id in record_ids:
+            new_record = copy.deepcopy(record)
+            # for chain_id, _ in enumerate(new_record["chains"]):
+            #     if new_record["chains"][chain_id]["msa_id"] != -1:
+            #         new_record["chains"][chain_id]["msa_id"] = f"{record_id}_{chain_id}"
+            new_record["id"] = record_id
+            manifest["records"].append(new_record)
+        with open(self.output_dir / "boltz_out" / "processed" / f"manifest.json", "w") as f:
             json.dump(manifest, f, indent=4)
 
     def _prepare_structure(self, complex_file: Path, pose_idx: str, ligand_idx: int) -> Optional[Path]:
         """Prepare structure by parsing MMCIF and saving structure data"""
-        pose_output_dir = self.output_dir / str(ligand_idx) / "boltz_out" / str(pose_idx) / self.fname
+        fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+        pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
         pose_output_dir.mkdir(parents=True, exist_ok=True)
-        extra_mols_dir = self.output_dir / str(ligand_idx) / "boltz_out" / "mols"
-        output_path = pose_output_dir / f"pre_affinity_{self.fname}.npz"
+        extra_mols_dir = self.output_dir / "out" / str(ligand_idx) / "boltz_out" / "mols"
+        output_path = pose_output_dir / f"pre_affinity_{fname}.npz"
         if output_path.exists() and not self.boltz_override:
             print(f"Skipping structure preparation for pose {pose_idx} because it already exists")
             return pose_output_dir
@@ -332,100 +357,24 @@ class Boltzina:
             print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
             return None
 
-    def _score_poses_parallel(self, ligand_files: List[str], batch_size: int) -> None:
-        """Score poses using torch multiprocessing"""
-        # Collect all scoring tasks
-        scoring_tasks = []
-        for idx, ligand_file in enumerate(ligand_files):
-            ligand_path = Path(ligand_file)
-            ligand_output_dir = self.output_dir / str(idx)
-
-            # Find all prepared pose directories
-            boltz_out_dir = ligand_output_dir / "boltz_out"
-            if boltz_out_dir.exists():
-                for pose_dir in boltz_out_dir.iterdir():
-                    if pose_dir.is_dir():
-                        pose_idx = pose_dir.name
-                        if str(pose_idx) not in self.pose_idxs:
-                            continue
-                        fname_dir = pose_dir / self.fname
-                        if fname_dir.exists():
-                            scoring_tasks.append((idx, pose_idx, ligand_path.stem, ligand_output_dir))
-
-        # Use torch multiprocessing for GPU-intensive scoring
-        if batch_size == 1:
-            init_worker()
-            results = []
-            for task in scoring_tasks:
-                result = self._score_single_pose(task)
-                results.append(result)
-        else:
-            mp.set_start_method('spawn', force=True)
-            with mp.Pool(batch_size, initializer=init_worker) as pool:
-                results = pool.map(self._score_single_pose, scoring_tasks)
-
-        # Collect results
-        for result in results:
-            if result is not None:
-                self.results.append(result)
-
-    def _score_single_pose(self, task_data):
+    def _score_poses(self):
         """Score a single pose"""
-        ligand_idx, pose_idx, ligand_name, ligand_output_dir = task_data
-        work_dir = self.work_dir or "boltz_results_base_config"
-
-        global boltz_model
-        if boltz_model is None:
-            raise ValueError("boltz_model is not set")
-
-        pose_output_dir = self.output_dir / str(ligand_idx) / "boltz_out" / str(pose_idx) / self.fname
-
-        if (pose_output_dir / f"affinity_{self.fname}.json").exists() and not self.boltz_override:
-            print(f"Skipping Boltzina scoring for pose {pose_idx} because it already exists")
-            return None
-        print("Scoring: ", pose_output_dir)
-        output_dir = pose_output_dir.parent
-        extra_mols_dir = self.output_dir / str(ligand_idx) / "boltz_out" / "mols"
+        work_dir = self.work_dir
+        output_dir = self.output_dir / "boltz_out" / "predictions"
+        extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
+        constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
         # Run Boltzina scoring directly with predict_affinity
-        try:
-            predictions = predict_affinity(
-                work_dir,
-                model_module=boltz_model,
-                output_dir=str(output_dir),  # boltz_out directory
-                structures_dir=str(output_dir),
-                extra_mols_dir=extra_mols_dir,
-                manifest_path = self.output_dir / str(ligand_idx) / "boltz_out" / "manifest.json",
-                num_workers=0
-            )
-        except Exception as e:
-            print(f"Error scoring pose {pose_idx} for ligand {ligand_name}: {e}")
-            return None
-
-        # Extract affinity results from predictions
-        if predictions and len(predictions) > 0:
-            pred_data = predictions[0]  # Get the first prediction
-
-            affinity_pred_value = float(pred_data['affinity_pred_value'].item()) if pred_data['affinity_pred_value'] is not None else None
-            affinity_probability_binary = float(pred_data['affinity_probability_binary'].item()) if pred_data['affinity_probability_binary'] is not None else None
-            affinity_pred_value1 = float(pred_data['affinity_pred_value1'].item()) if pred_data['affinity_pred_value1'] is not None else None
-            affinity_probability_binary1 = float(pred_data['affinity_probability_binary1'].item()) if pred_data['affinity_probability_binary1'] is not None else None
-            affinity_pred_value2 = float(pred_data['affinity_pred_value2'].item()) if pred_data['affinity_pred_value2'] is not None else None
-            affinity_probability_binary2 = float(pred_data['affinity_probability_binary2'].item()) if pred_data['affinity_probability_binary2'] is not None else None
-
-            return {
-                'ligand_name': ligand_name,
-                'ligand_idx': ligand_idx,
-                'docking_rank': int(pose_idx),
-                'docking_score': self._extract_docking_score(ligand_output_dir / "docked.pdbqt", int(pose_idx)),
-                'affinity_pred_value': affinity_pred_value,
-                'affinity_probability_binary': affinity_probability_binary,
-                'affinity_pred_value1': affinity_pred_value1,
-                'affinity_probability_binary1': affinity_probability_binary1,
-                'affinity_pred_value2': affinity_pred_value2,
-                'affinity_probability_binary2': affinity_probability_binary2
-            }
-
-        return None
+        predict_affinity(
+            work_dir,
+            model_module=self.boltz_model,
+            output_dir=str(output_dir),  # boltz_out directory
+            structures_dir=str(output_dir),
+            constraints_dir=str(constraints_dir),
+            extra_mols_dir=extra_mols_dir,
+            manifest_path = self.output_dir / "boltz_out" / "processed" / "manifest.json",
+            num_workers=0,
+            batch_size=self.batch_size,
+        )
 
     def _extract_docking_score(self, docked_pdbqt: Path, pose_idx: int) -> Optional[float]:
         try:
@@ -446,6 +395,21 @@ class Boltzina:
             return None
         except:
             return None
+
+    def _extract_results(self, ligand_files: List[str]):
+        results = []
+        for ligand_idx, ligand_file in enumerate(ligand_files):
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+                pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
+                with open(pose_output_dir / f"affinity_{fname}.json", "r") as f:
+                    affinity = json.load(f)
+                affinity["ligand_name"] = ligand_file
+                affinity["ligand_idx"] = ligand_idx
+                affinity["docking_rank"] = pose_idx
+                affinity["docking_score"] = self._extract_docking_score(self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt", int(pose_idx))
+                results.append(affinity)
+        self.results = results
 
     def save_results_csv(self, output_file: Optional[str] = None) -> None:
         if output_file is None:
