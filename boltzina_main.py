@@ -4,6 +4,7 @@ import pickle
 import json
 import csv
 import copy
+import torch
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from multiprocessing import Pool
@@ -20,7 +21,7 @@ from boltz.main import get_cache_path
 boltz_model = None
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest"):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -35,6 +36,7 @@ class Boltzina:
         self.pose_idxs = [str(pose_idx) for pose_idx in range(1, self.num_boltz_poses + 1)]
         self.input_ligand_name = input_ligand_name
         self.base_ligand_name = base_ligand_name
+        self.float32_matmul_precision = float32_matmul_precision
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -52,6 +54,7 @@ class Boltzina:
         self.manifest = manifest
 
         self.fname = self._get_fname() if fname is None else fname
+        torch.set_float32_matmul_precision(self.float32_matmul_precision)
         self.boltz_model = load_boltz2_model()
 
     def _prepare_receptor(self) -> Path:

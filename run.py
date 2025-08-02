@@ -13,6 +13,7 @@ def main():
     parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for AutoDock Vina")
     parser.add_argument("--vina_override", action="store_true", help="Override results of AutoDock Vina")
     parser.add_argument("--boltz_override", action="store_true", help="Override results of Boltz-2 Scoring")
+    parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config_dict = json.load(f)
@@ -23,6 +24,8 @@ def main():
     config = config_dict["vina_config"]
     input_ligand_name = config_dict["input_ligand_name"]
     fname = config_dict["fname"]
+    float32_matmul_precision = config_dict.get("float32_matmul_precision", args.float32_matmul_precision)
+    print(f"Using float32 matmul precision: {float32_matmul_precision}")
 
     boltzina = Boltzina(
         receptor_pdb=receptor_pdb,
@@ -36,6 +39,7 @@ def main():
         boltz_override=args.boltz_override,
         num_workers=args.num_workers,
         batch_size=args.batch_size,
+        float32_matmul_precision=float32_matmul_precision
     )
 
     boltzina.run(ligand_files)
