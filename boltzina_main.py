@@ -18,10 +18,8 @@ from boltzina.affinity.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
 from boltz.main import get_cache_path
 
-boltz_model = None
-
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest"):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", do_docking: bool = True, skip_run_structure: bool = True):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -37,11 +35,16 @@ class Boltzina:
         self.input_ligand_name = input_ligand_name
         self.base_ligand_name = base_ligand_name
         self.float32_matmul_precision = float32_matmul_precision
+        self.do_docking = do_docking
+        self.skip_run_structure = skip_run_structure
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Prepare receptor PDBQT file
-        self.receptor_pdbqt = self._prepare_receptor()
+        if do_docking:
+            self.receptor_pdbqt = self._prepare_receptor()
+        else:
+            self.receptor_pdbqt = self.receptor_pdb
 
         # Initialize cache directory and CCD
         self.cache_dir = Path(get_cache_path())
@@ -55,7 +58,6 @@ class Boltzina:
 
         self.fname = self._get_fname() if fname is None else fname
         torch.set_float32_matmul_precision(self.float32_matmul_precision)
-        self.boltz_model = load_boltz2_model()
 
     def _prepare_receptor(self) -> Path:
         """Prepare receptor PDBQT file using prepare_receptor4.py"""
@@ -125,7 +127,8 @@ class Boltzina:
             ligand_path = Path(ligand_file)
             ligand_output_dir = self.output_dir / "out" / str(idx)
             ligand_output_dir.mkdir(parents=True, exist_ok=True)
-
+            if (ligand_output_dir / "done").exists() and not self.vina_override:
+                continue
             prep_tasks.append((idx, ligand_path, ligand_output_dir))
         print(f"Docking {len(ligand_files)} ligands with {self.num_workers} workers...")
 
@@ -147,22 +150,22 @@ class Boltzina:
 
             for complex_file in complex_files:
                 pose_idx = complex_file.stem.split("_")[2]
-                record_ids.append(f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}")
+                fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
+                record_ids.append(fname)
                 if str(pose_idx) not in self.pose_idxs:
+                    continue
+                if (self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz").exists() and not self.boltz_override:
                     continue
                 structure_tasks.append((complex_file, pose_idx, idx))
 
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
         self._update_manifest(record_ids)
         self._link_constraints(record_ids)
-        if self.num_workers == 1:
-            prepared_dirs = []
-            for task in structure_tasks:
-                result = self._prepare_structure_parallel(task)
-                prepared_dirs.append(result)
-        else:
-            with Pool(self.num_workers) as pool:
-                prepared_dirs = pool.map(self._prepare_structure_parallel, structure_tasks)
+
+        prepared_dirs = []
+        for complex_file, pose_idx, ligand_idx in structure_tasks:
+            result = self._prepare_structure(complex_file, pose_idx, ligand_idx)
+            prepared_dirs.append(result)
 
         print("Scoring poses with Boltzina...")
         # Execute scoring with torch multiprocessing
@@ -187,10 +190,8 @@ class Boltzina:
         # Update CCD for ligand
         self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
 
-    def _prepare_structure_parallel(self, task_data):
-        """Prepare structure task for multiprocessing"""
-        complex_file, pose_idx, ligand_idx = task_data
-        return self._prepare_structure(complex_file, pose_idx, ligand_idx)
+        # Touch done file
+        (ligand_output_dir / "done").touch()
 
     def _convert_to_pdbqt(self, input_file: Path, output_file: Path) -> None:
         if output_file.exists() and not self.vina_override:
@@ -238,21 +239,25 @@ class Boltzina:
             pose_idx = pdb_file.stem.split("_")[-1]
             if str(pose_idx) not in self.pose_idxs:
                 continue
-            self._process_pose(ligand_idx, pose_idx, pdb_file)
+            ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+            base_name = f"docked_ligand_{pose_idx}"
+            self._process_pose(ligand_output_dir, base_name, pdb_file)
 
-    def _process_pose(self, ligand_idx: int, pose_idx: str, pdb_file: Path) -> None:
-        ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+    def _process_pose(self, ligand_output_dir: Path, base_name: str, pdb_file: Path) -> None:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
-
-        base_name = f"docked_ligand_{pose_idx}"
+        docked_ligands_dir.mkdir(exist_ok=True)
         prep_file = docked_ligands_dir / f"{base_name}_prep.pdb"
         complex_file = docked_ligands_dir / f"{base_name}_B_complex.pdb"
         complex_cif = docked_ligands_dir / f"{base_name}_B_complex.cif"
         complex_fix_cif = docked_ligands_dir / f"{base_name}_B_complex_fix.cif"
 
         # Process with pdb_chain and pdb_rplresname
-        cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
-        subprocess.run(cmd1, shell=True, check=True)
+        if self.input_ligand_name != self.base_ligand_name:
+            cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
+            subprocess.run(cmd1, shell=True, check=True)
+        else:
+            cmd1 = f"pdb_chain -B {pdb_file} | pdb_tidy > {prep_file}"
+            subprocess.run(cmd1, shell=True, check=True)
 
         # Merge with receptor
         cmd2 = f"pdb_merge {self.receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
@@ -367,6 +372,7 @@ class Boltzina:
         extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
         constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
         # Run Boltzina scoring directly with predict_affinity
+        self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure)
         predict_affinity(
             work_dir,
             model_module=self.boltz_model,
