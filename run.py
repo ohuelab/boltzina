@@ -14,17 +14,22 @@ def main():
     parser.add_argument("--vina_override", action="store_true", help="Override results of AutoDock Vina")
     parser.add_argument("--boltz_override", action="store_true", help="Override results of Boltz-2 Scoring")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config_dict = json.load(f)
     receptor_pdb = config_dict["receptor_pdb"]
     ligand_files = config_dict["ligand_files"]
-    output_dir = config_dict["output_dir"]
+    output_dir = args.output_dir if args.output_dir else config_dict["output_dir"]
     work_dir = config_dict["work_dir"]
     config = config_dict["vina_config"]
     input_ligand_name = config_dict["input_ligand_name"]
     fname = config_dict["fname"]
     float32_matmul_precision = config_dict.get("float32_matmul_precision", args.float32_matmul_precision)
+    scoring_only = config_dict.get("scoring_only", False)
+    print("--------------------------------")
+    print(f"Output directory: {output_dir}")
+    print(f"Mode: {'scoring only' if scoring_only else 'docking'}")
     print(f"Using float32 matmul precision: {float32_matmul_precision}")
 
     boltzina = Boltzina(
@@ -39,7 +44,8 @@ def main():
         boltz_override=args.boltz_override,
         num_workers=args.num_workers,
         batch_size=args.batch_size,
-        float32_matmul_precision=float32_matmul_precision
+        float32_matmul_precision=float32_matmul_precision,
+        scoring_only=scoring_only
     )
 
     boltzina.run(ligand_files)
