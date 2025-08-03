@@ -19,7 +19,7 @@ from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affini
 from boltz.main import get_cache_path
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", do_docking: bool = True, skip_run_structure: bool = True):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", scoring_only: bool = False, skip_run_structure: bool = True):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -35,13 +35,14 @@ class Boltzina:
         self.input_ligand_name = input_ligand_name
         self.base_ligand_name = base_ligand_name
         self.float32_matmul_precision = float32_matmul_precision
-        self.do_docking = do_docking
+        self.scoring_only = scoring_only
         self.skip_run_structure = skip_run_structure
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        self.ligand_files = []
         # Prepare receptor PDBQT file
-        if do_docking:
+        if not self.scoring_only:
             self.receptor_pdbqt = self._prepare_receptor()
         else:
             self.receptor_pdbqt = self.receptor_pdb
@@ -122,6 +123,11 @@ class Boltzina:
         return self.manifest["records"][0]["id"]
 
     def run(self, ligand_files: List[str]) -> None:
+        if self.scoring_only:
+            print("Running scoring only...")
+            self.run_scoring_only(ligand_files)
+            return
+        self.ligand_files = ligand_files
         prep_tasks = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
@@ -446,6 +452,67 @@ class Boltzina:
 
     def get_results_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.results)
+
+    def run_scoring_only(self, ligand_files: List[str]) -> None:
+        """
+        Run scoring-only mode for ligands with existing poses (no docking).
+        Based on scoring_only.py logic.
+        """
+        print(f"Running scoring-only mode for {len(ligand_files)} ligand poses...")
+        self.ligand_files = ligand_files
+        # Process pose files
+        for ligand_idx, pdb_file in enumerate(ligand_files):
+            ligand_path = Path(pdb_file)
+            ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+            ligand_output_dir.mkdir(parents=True, exist_ok=True)
+            base_name = ligand_path.stem
+            self._process_pose(ligand_output_dir, base_name, ligand_path)
+
+        # Update CCD for each ligand
+        for ligand_idx, pdb_file in enumerate(ligand_files):
+            ligand_path = Path(pdb_file)
+            ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+            self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
+
+        # Process boltz input and prepare structures
+        record_ids = []
+        for ligand_idx, pdb_file in enumerate(ligand_files):
+            ligand_path = Path(pdb_file)
+            base_name = ligand_path.stem
+            ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+            complex_file = ligand_output_dir / "docked_ligands" / f"{base_name}_B_complex_fix.cif"
+
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
+                record_ids.append(fname)
+                self._prepare_structure(complex_file, pose_idx, ligand_idx)
+
+        # Update manifest and link constraints
+        self._update_manifest(record_ids)
+        self._link_constraints(record_ids)
+
+        # Score poses
+        print("Scoring poses with Boltzina...")
+        self._score_poses()
+
+        # Extract results
+        self._extract_results_scoring_only(ligand_files)
+
+    def _extract_results_scoring_only(self, ligand_files: List[str]):
+        """Extract results for scoring-only mode (no docking scores)"""
+        results = []
+        for ligand_idx, ligand_file in enumerate(ligand_files):
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+                pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
+                with open(pose_output_dir / f"affinity_{fname}.json", "r") as f:
+                    affinity = json.load(f)
+                affinity["ligand_name"] = ligand_file
+                affinity["ligand_idx"] = ligand_idx
+                affinity["docking_rank"] = pose_idx
+                affinity["docking_score"] = None  # No docking score in scoring-only mode
+                results.append(affinity)
+        self.results = results
 
 
 def main():
