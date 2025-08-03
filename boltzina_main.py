@@ -8,7 +8,6 @@ import torch
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from multiprocessing import Pool
-import torch.multiprocessing as mp
 import pandas as pd
 from rdkit import Chem
 import shutil
@@ -176,7 +175,7 @@ class Boltzina:
         print("Scoring poses with Boltzina...")
         # Execute scoring with torch multiprocessing
         self._score_poses()
-        self._extract_results(ligand_files)
+        self._extract_results()
 
     def _prepare_ligand(self, task_data):
         """Prepare ligand task for multiprocessing"""
@@ -411,9 +410,9 @@ class Boltzina:
         except:
             return None
 
-    def _extract_results(self, ligand_files: List[str]):
+    def _extract_results(self):
         results = []
-        for ligand_idx, ligand_file in enumerate(ligand_files):
+        for ligand_idx, ligand_file in enumerate(self.ligand_files):
             for pose_idx in self.pose_idxs:
                 fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
                 pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
@@ -422,7 +421,11 @@ class Boltzina:
                 affinity["ligand_name"] = ligand_file
                 affinity["ligand_idx"] = ligand_idx
                 affinity["docking_rank"] = pose_idx
-                affinity["docking_score"] = self._extract_docking_score(self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt", int(pose_idx))
+                # Set docking score based on mode
+                if self.scoring_only:
+                    affinity["docking_score"] = None
+                else:
+                    affinity["docking_score"] = self._extract_docking_score(self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt", int(pose_idx))
                 results.append(affinity)
         self.results = results
 
@@ -458,10 +461,11 @@ class Boltzina:
         Run scoring-only mode for ligands with existing poses (no docking).
         Based on scoring_only.py logic.
         """
-        print(f"Running scoring-only mode for {len(ligand_files)} ligand poses...")
         self.ligand_files = ligand_files
+        print(f"Running scoring-only mode for {len(self.ligand_files)} ligand poses...")
+        
         # Process pose files
-        for ligand_idx, pdb_file in enumerate(ligand_files):
+        for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
             ligand_output_dir.mkdir(parents=True, exist_ok=True)
@@ -469,14 +473,14 @@ class Boltzina:
             self._process_pose(ligand_output_dir, base_name, ligand_path)
 
         # Update CCD for each ligand
-        for ligand_idx, pdb_file in enumerate(ligand_files):
+        for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
             self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
 
         # Process boltz input and prepare structures
         record_ids = []
-        for ligand_idx, pdb_file in enumerate(ligand_files):
+        for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
             base_name = ligand_path.stem
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
@@ -496,23 +500,8 @@ class Boltzina:
         self._score_poses()
 
         # Extract results
-        self._extract_results_scoring_only(ligand_files)
+        self._extract_results()
 
-    def _extract_results_scoring_only(self, ligand_files: List[str]):
-        """Extract results for scoring-only mode (no docking scores)"""
-        results = []
-        for ligand_idx, ligand_file in enumerate(ligand_files):
-            for pose_idx in self.pose_idxs:
-                fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
-                pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
-                with open(pose_output_dir / f"affinity_{fname}.json", "r") as f:
-                    affinity = json.load(f)
-                affinity["ligand_name"] = ligand_file
-                affinity["ligand_idx"] = ligand_idx
-                affinity["docking_rank"] = pose_idx
-                affinity["docking_score"] = None  # No docking score in scoring-only mode
-                results.append(affinity)
-        self.results = results
 
 
 def main():
