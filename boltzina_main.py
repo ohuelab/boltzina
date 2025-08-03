@@ -164,6 +164,7 @@ class Boltzina:
                 structure_tasks.append((complex_file, pose_idx, idx))
 
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
+        (self.output_dir / "boltz_out" / "processed").mkdir(parents=True, exist_ok=True)
         self._update_manifest(record_ids)
         self._link_constraints(record_ids)
 
@@ -386,7 +387,7 @@ class Boltzina:
             constraints_dir=str(constraints_dir),
             extra_mols_dir=extra_mols_dir,
             manifest_path = self.output_dir / "boltz_out" / "processed" / "manifest.json",
-            num_workers=0,
+            num_workers=max(min(os.cpu_count(), 4), self.num_workers),
             batch_size=self.batch_size,
         )
 
@@ -416,6 +417,9 @@ class Boltzina:
             for pose_idx in self.pose_idxs:
                 fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
                 pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
+                if not (pose_output_dir / f"affinity_{fname}.json").exists():
+                    print(f"Skipping {fname} because it doesn't exist")
+                    continue
                 with open(pose_output_dir / f"affinity_{fname}.json", "r") as f:
                     affinity = json.load(f)
                 affinity["ligand_name"] = ligand_file
@@ -463,7 +467,7 @@ class Boltzina:
         """
         self.ligand_files = ligand_files
         print(f"Running scoring-only mode for {len(self.ligand_files)} ligand poses...")
-        
+
         # Process pose files
         for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
