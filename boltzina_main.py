@@ -18,7 +18,7 @@ from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affini
 from boltz.main import get_cache_path
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", scoring_only: bool = False, skip_run_structure: bool = True):
+    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", scoring_only: bool = False, skip_run_structure: bool = True, prepared_mols_file: Optional[str] = None):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -38,6 +38,12 @@ class Boltzina:
         self.skip_run_structure = skip_run_structure
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.prepared_mols_file = prepared_mols_file
+        if prepared_mols_file:
+            with open(prepared_mols_file, "rb") as f:
+                self.mol_dict = pickle.load(f)
+        else:
+            self.mol_dict = None
 
         self.ligand_files = []
         # Prepare receptor PDBQT file
@@ -297,15 +303,20 @@ class Boltzina:
             if all_exist:
                 return
 
-        mol = Chem.MolFromPDBFile(ligand_path)
+        if self.mol_dict:
+            molkey = f"{self.fname}_{ligand_output_dir.stem}"
+            mol = self.mol_dict[molkey]
+        else:
+            mol = Chem.MolFromPDBFile(ligand_path)
+            for atom in mol.GetAtoms():
+                pdb_info = atom.GetPDBResidueInfo()
+                if pdb_info:
+                    atom_name = pdb_info.GetName().strip().upper()
+                    atom.SetProp("name", atom_name)
+
         if mol is None:
             raise ValueError(f"Failed to read PDB file {ligand_path}")
 
-        for atom in mol.GetAtoms():
-            pdb_info = atom.GetPDBResidueInfo()
-            if pdb_info:
-                atom_name = pdb_info.GetName().strip().upper()
-                atom.SetProp("name", atom_name)
         for pose_idx in self.pose_idxs:
             fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
             with open(base_extra_mols_dir / f"{fname}.pkl", "wb") as f:

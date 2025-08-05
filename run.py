@@ -27,6 +27,7 @@ def main():
     fname = config_dict["fname"]
     float32_matmul_precision = config_dict.get("float32_matmul_precision", args.float32_matmul_precision)
     scoring_only = config_dict.get("scoring_only", False)
+    prepared_mols_file = config_dict.get("prepared_mols_file", None)
     print("--------------------------------")
     print(f"Output directory: {output_dir}")
     print(f"Mode: {'scoring only' if scoring_only else 'docking'}")
@@ -45,7 +46,8 @@ def main():
         num_workers=args.num_workers,
         batch_size=args.batch_size,
         float32_matmul_precision=float32_matmul_precision,
-        scoring_only=scoring_only
+        scoring_only=scoring_only,
+        prepared_mols_file=prepared_mols_file
     )
 
     boltzina.run(ligand_files)
