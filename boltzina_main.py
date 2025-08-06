@@ -18,7 +18,27 @@ from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affini
 from boltz.main import get_cache_path
 
 class Boltzina:
-    def __init__(self, receptor_pdb: str, output_dir: str, config: str, mgl_path: Optional[str] = None, work_dir: Optional[str] = None, input_ligand_name = "MOL", base_ligand_name = "MOL", vina_override: bool = False, boltz_override: bool = False, num_workers: int = 4, batch_size: int = 4, num_boltz_poses: int = 1, fname: Optional[str] = None, float32_matmul_precision: str = "highest", scoring_only: bool = False, skip_run_structure: bool = True, prepared_mols_file: Optional[str] = None):
+    def __init__(
+        self,
+        receptor_pdb: str,
+        output_dir: str,
+        config: str,
+        mgl_path: Optional[str] = None,
+        work_dir: Optional[str] = None,
+        num_workers: int = 4,
+        batch_size: int = 4,
+        num_boltz_poses: int = 1,
+        timeout: int = 300,
+        vina_override: bool = False,
+        boltz_override: bool = False,
+        input_ligand_name: str = "MOL",
+        base_ligand_name: str = "MOL",
+        fname: Optional[str] = None,
+        float32_matmul_precision: str = "highest",
+        scoring_only: bool = False,
+        skip_run_structure: bool = True,
+        prepared_mols_file: Optional[str] = None,
+    ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
@@ -36,6 +56,7 @@ class Boltzina:
         self.float32_matmul_precision = float32_matmul_precision
         self.scoring_only = scoring_only
         self.skip_run_structure = skip_run_structure
+        self.timeout = timeout
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
@@ -55,8 +76,7 @@ class Boltzina:
         # Initialize cache directory and CCD
         self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
-        self.ccd = self._load_ccd()
-
+        self.ccd = None
         manifest_path = self.work_dir / "processed" / "manifest.json"
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
@@ -150,6 +170,12 @@ class Boltzina:
             with Pool(self.num_workers) as pool:
                 pool.map(self._prepare_ligand, prep_tasks)
 
+        self.ccd = self._load_ccd()
+        for task in prep_tasks:
+            ligand_path = Path(task[1])
+            ligand_output_dir = task[2]
+            self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
+
         print("Preparing structures for scoring...")
         structure_tasks = []
         record_ids = []
@@ -177,6 +203,7 @@ class Boltzina:
         prepared_dirs = []
         for complex_file, pose_idx, ligand_idx in structure_tasks:
             result = self._prepare_structure(complex_file, pose_idx, ligand_idx)
+            self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
             prepared_dirs.append(result)
 
         print("Scoring poses with Boltzina...")
@@ -184,32 +211,53 @@ class Boltzina:
         self._score_poses()
         self._extract_results()
 
+        # Clean up intermediate files after scoring
+        self._cleanup_scoring_intermediates()
+
     def _prepare_ligand(self, task_data):
         """Prepare ligand task for multiprocessing"""
         idx, ligand_path, ligand_output_dir = task_data
 
-        # Convert ligand to PDBQT format if needed
-        ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
-        self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
+        try:
+            # Convert ligand to PDBQT format if needed
+            ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
+            self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
 
-        # Run Vina docking
-        docked_pdbqt = ligand_output_dir / "docked.pdbqt"
-        self._run_vina(ligand_pdbqt, docked_pdbqt)
+            # Run Vina docking
+            docked_pdbqt = ligand_output_dir / "docked.pdbqt"
+            self._run_vina(ligand_pdbqt, docked_pdbqt)
 
-        # Preprocess docked structures
-        self._preprocess_docked_structures(idx, docked_pdbqt)
+            # Preprocess docked structures
+            self._preprocess_docked_structures(idx, docked_pdbqt)
 
-        # Update CCD for ligand
-        self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
+            # Clean up intermediate files (keep docked.pdbqt)
+            self._cleanup_vina_intermediates(ligand_output_dir)
 
-        # Touch done file
-        (ligand_output_dir / "done").touch()
+            # Touch done file only on successful completion
+            (ligand_output_dir / "done").touch()
+
+        except Exception as e:
+            print(f"Error processing ligand {ligand_path} (idx={idx}): {e}")
+            # Remove done file if it exists (in case of partial failure)
+            done_file = ligand_output_dir / "done"
+            if done_file.exists():
+                try:
+                    done_file.unlink()
+                except OSError:
+                    pass
 
     def _convert_to_pdbqt(self, input_file: Path, output_file: Path) -> None:
         if output_file.exists() and not self.vina_override:
             return
         cmd = ["obabel", str(input_file), "-O", str(output_file)]
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if not output_file.exists():
+                raise RuntimeError(f"Failed to create PDBQT file: {output_file}")
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Error converting {input_file} to PDBQT: {e.stderr}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during PDBQT conversion: {e}")
 
     def _run_vina(self, ligand_pdbqt: Path, output_pdbqt: Path) -> None:
         if output_pdbqt.exists() and not self.vina_override:
@@ -222,7 +270,16 @@ class Boltzina:
             "--out", str(output_pdbqt),
             "--config", str(self.config),
         ]
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True, timeout=self.timeout, capture_output=True, text=True)
+            if not output_pdbqt.exists():
+                raise RuntimeError(f"Vina failed to create output file: {output_pdbqt}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Vina docking timed out for {ligand_pdbqt} after {self.timeout} seconds")
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Vina docking failed for {ligand_pdbqt}: {e.stderr}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during Vina docking: {e}")
 
     def _preprocess_docked_structures(self, ligand_idx: int, docked_pdbqt: Path) -> None:
         ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
@@ -241,7 +298,12 @@ class Boltzina:
             "obabel", str(docked_pdbqt), "-m", "-O",
             str(docked_ligands_dir / "docked_ligand_.pdb")
         ]
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to convert docked PDBQT to PDB files: {e.stderr}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during PDBQT to PDB conversion: {e}")
 
         # Process each docked pose
         for pdb_file in docked_ligands_dir.glob("docked_ligand_*.pdb"):
@@ -264,28 +326,46 @@ class Boltzina:
         complex_fix_cif = docked_ligands_dir / f"{base_name}_B_complex_fix.cif"
 
         # Process with pdb_chain and pdb_rplresname
-        if self.input_ligand_name != self.base_ligand_name:
-            cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
-            subprocess.run(cmd1, shell=True, check=True)
-        else:
-            cmd1 = f"pdb_chain -B {pdb_file} | pdb_tidy > {prep_file}"
-            subprocess.run(cmd1, shell=True, check=True)
+        try:
+            if self.input_ligand_name != self.base_ligand_name:
+                cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
+                subprocess.run(cmd1, shell=True, check=True)
+            else:
+                cmd1 = f"pdb_chain -B {pdb_file} | pdb_tidy > {prep_file}"
+                subprocess.run(cmd1, shell=True, check=True)
 
-        # Merge with receptor
-        cmd2 = f"pdb_merge {self.receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
-        subprocess.run(cmd2, shell=True, check=True)
+            if not prep_file.exists():
+                raise RuntimeError(f"Failed to create prep file: {prep_file}")
 
-        # Convert to CIF
-        cmd3 = [
-            "maxit", "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"
-        ]
-        subprocess.run(cmd3, check=True)
+            # Merge with receptor
+            cmd2 = f"pdb_merge {self.receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
+            subprocess.run(cmd2, shell=True, check=True)
 
-        # Fix CIF
-        cmd4 = [
-            "maxit", "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"
-        ]
-        subprocess.run(cmd4, check=True)
+            if not complex_file.exists():
+                raise RuntimeError(f"Failed to create complex file: {complex_file}")
+
+            # Convert to CIF
+            cmd3 = [
+                "maxit", "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"
+            ]
+            subprocess.run(cmd3, check=True)
+
+            if not complex_cif.exists():
+                raise RuntimeError(f"Failed to create CIF file: {complex_cif}")
+
+            # Fix CIF
+            cmd4 = [
+                "maxit", "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"
+            ]
+            subprocess.run(cmd4, check=True)
+
+            if not complex_fix_cif.exists():
+                raise RuntimeError(f"Failed to create fixed CIF file: {complex_fix_cif}")
+
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Error processing pose {pdb_file}: Command failed with return code {e.returncode}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error processing pose {pdb_file}: {e}")
 
     def _update_ccd_for_ligand(self, ligand_output_dir: Path, ligand_path: Optional[Path] = None):
         base_extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
@@ -304,8 +384,7 @@ class Boltzina:
                 return
 
         if self.mol_dict:
-            molkey = f"{self.fname}_{ligand_output_dir.stem}"
-            mol = self.mol_dict[molkey]
+            mol = self.mol_dict[ligand_path.stem]
         else:
             mol = Chem.MolFromPDBFile(ligand_path)
             for atom in mol.GetAtoms():
@@ -444,6 +523,77 @@ class Boltzina:
                 results.append(affinity)
         self.results = results
 
+    def _cleanup_vina_intermediates(self, ligand_output_dir: Path) -> None:
+        """Clean up intermediate files after Vina docking, keeping docked.pdbqt"""
+        # Remove ligand.pdbqt
+        ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
+        if ligand_pdbqt.exists():
+            try:
+                ligand_pdbqt.unlink()
+            except OSError:
+                pass
+        docked_ligands_dir = ligand_output_dir / "docked_ligands"
+        if docked_ligands_dir.exists():
+            for file_path in docked_ligands_dir.iterdir():
+                if not file_path.name.endswith("_B_complex_fix.cif"):
+                    if file_path.is_file():
+                        file_path.unlink()
+                    elif file_path.is_dir():
+                        shutil.rmtree(file_path)
+
+    def _cleanup_preaffinity_intermediates(self, pose_idx: str, ligand_idx: int) -> None:
+        """Clean up intermediate files after pre-affinity calculation"""
+        # Check if pre_affinity file exists in predictions directory
+        fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+        predictions_dir = self.output_dir / "boltz_out" / "predictions" / fname
+        pre_affinity_file = predictions_dir / f"pre_affinity_{fname}.npz"
+
+        if pre_affinity_file.exists():
+            # Get the ligand output directory
+            ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+
+            # Remove boltz_out directory under the ligand output directory
+            ligand_boltz_out = ligand_output_dir / "boltz_out"
+            if ligand_boltz_out.exists():
+                try:
+                    shutil.rmtree(ligand_boltz_out)
+                except OSError:
+                    pass
+
+            # Remove docked_ligands directory
+            docked_ligands_dir = ligand_output_dir / "docked_ligands"
+            if docked_ligands_dir.exists():
+                try:
+                    shutil.rmtree(docked_ligands_dir)
+                except OSError:
+                    pass
+
+    def _cleanup_scoring_intermediates(self) -> None:
+        """Clean up intermediate files after scoring"""
+        boltz_output_dir = self.output_dir / "boltz_out"
+
+        # Remove processed directory and all its contents
+        processed_dir = boltz_output_dir / "processed"
+        if processed_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(processed_dir)
+            except OSError:
+                pass
+
+        # Remove pre_affinity files from predictions directory
+        predictions_dir = boltz_output_dir / "predictions"
+        if predictions_dir.exists():
+            for pre_affinity_file in predictions_dir.glob("*/pre_affinity_*.npz"):
+                # Extract the base name to check for corresponding affinity file
+                affinity_file = pre_affinity_file.parent / pre_affinity_file.name.replace("pre_affinity_", "affinity_").replace(".npz", ".json")
+                if affinity_file.exists():
+                    try:
+                        pre_affinity_file.unlink()
+                    except OSError:
+                        pass
+
+
     def save_results_csv(self, output_file: Optional[str] = None) -> None:
         if output_file is None:
             output_file = self.output_dir / "boltzina_results.csv"
@@ -505,6 +655,7 @@ class Boltzina:
                 fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
                 record_ids.append(fname)
                 self._prepare_structure(complex_file, pose_idx, ligand_idx)
+                self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
         # Update manifest and link constraints
         self._update_manifest(record_ids)
@@ -516,6 +667,9 @@ class Boltzina:
 
         # Extract results
         self._extract_results()
+
+        # Clean up intermediate files after scoring
+        self._cleanup_scoring_intermediates()
 
 
 
