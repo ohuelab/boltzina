@@ -36,6 +36,7 @@ class Boltzina:
         fname: Optional[str] = None,
         float32_matmul_precision: str = "highest",
         scoring_only: bool = False,
+        skip_docking: bool = False,
         skip_run_structure: bool = True,
         prepared_mols_file: Optional[str] = None,
     ):
@@ -55,6 +56,7 @@ class Boltzina:
         self.base_ligand_name = base_ligand_name
         self.float32_matmul_precision = float32_matmul_precision
         self.scoring_only = scoring_only
+        self.skip_docking = skip_docking
         self.skip_run_structure = skip_run_structure
         self.timeout = timeout
         # Create output directory if it doesn't exist
@@ -163,48 +165,72 @@ class Boltzina:
             prep_tasks.append((idx, ligand_path, ligand_output_dir))
         print(f"Docking {len(ligand_files)} ligands with {self.num_workers} workers...")
 
-        if self.num_workers == 1:
-            for task in prep_tasks:
-                self._prepare_ligand(task)
+        if not self.skip_docking:
+            if self.num_workers == 1:
+                for task in prep_tasks:
+                    self._prepare_ligand(task)
+            else:
+                with Pool(self.num_workers) as pool:
+                    pool.map(self._prepare_ligand, prep_tasks)
         else:
-            with Pool(self.num_workers) as pool:
-                pool.map(self._prepare_ligand, prep_tasks)
+            print("Skipping docking...")
 
         self.ccd = self._load_ccd()
-        for task in prep_tasks:
-            ligand_path = Path(task[1])
-            ligand_output_dir = task[2]
-            self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
+        for idx, ligand_file in enumerate(ligand_files):
+            all_exist = True
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{idx}_{pose_idx}"
+                if not (self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json").exists():
+                    all_exist = False
+                    break
+            if not all_exist:
+                ligand_output_dir = self.output_dir / "out" / str(idx)
+                self._update_ccd_for_ligand(ligand_output_dir, ligand_file)
 
         print("Preparing structures for scoring...")
         structure_tasks = []
-        record_ids = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
             ligand_output_dir = self.output_dir / "out" / str(idx)
             docked_ligands_dir = ligand_output_dir / "docked_ligands"
-            complex_files = list(docked_ligands_dir.glob("*_B_complex_fix.cif"))
-
-            for complex_file in complex_files:
-                pose_idx = complex_file.stem.split("_")[2]
+            for pose_idx in self.pose_idxs:
+                complex_file = docked_ligands_dir / f"docked_ligand_{pose_idx}_B_complex_fix.cif"
                 fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
-                record_ids.append(fname)
-                if str(pose_idx) not in self.pose_idxs:
+                affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json"
+                pre_affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz"
+                if affinity_file.exists() and not self.boltz_override:
                     continue
-                if (self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz").exists() and not self.boltz_override:
+                if pre_affinity_file.exists() and not self.boltz_override:
                     continue
                 structure_tasks.append((complex_file, pose_idx, idx))
 
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
         (self.output_dir / "boltz_out" / "processed").mkdir(parents=True, exist_ok=True)
-        self._update_manifest(record_ids)
-        self._link_constraints(record_ids)
 
         prepared_dirs = []
         for complex_file, pose_idx, ligand_idx in structure_tasks:
             result = self._prepare_structure(complex_file, pose_idx, ligand_idx)
             self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
             prepared_dirs.append(result)
+
+        record_ids = []
+        for idx, ligand_file in enumerate(ligand_files):
+            ligand_path = Path(ligand_file)
+            ligand_output_dir = self.output_dir / "out" / str(idx)
+            docked_ligands_dir = ligand_output_dir / "docked_ligands"
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{idx}_{pose_idx}"
+                affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json"
+                pre_affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz"
+                if affinity_file.exists() and not self.boltz_override:
+                    continue
+                if not pre_affinity_file.exists(): # If preparation failed
+                    continue
+                record_ids.append(fname)
+
+        print(f"Affinity prediction will be run for {len(record_ids)} records")
+        self._update_manifest(record_ids)
+        self._link_constraints(record_ids)
 
         print("Scoring poses with Boltzina...")
         # Execute scoring with torch multiprocessing
@@ -415,8 +441,6 @@ class Boltzina:
         return
 
     def _update_manifest(self, record_ids: List[str]) -> None:
-        if (self.output_dir / "boltz_out" / "processed" / f"manifest.json").exists() and not self.boltz_override:
-            return
         manifest = copy.deepcopy(self.manifest)
         record = [record for record in manifest["records"] if record["id"] == self.fname][0]
         manifest["records"] = []
@@ -437,6 +461,13 @@ class Boltzina:
         pose_output_dir.mkdir(parents=True, exist_ok=True)
         extra_mols_dir = self.output_dir / "out" / str(ligand_idx) / "boltz_out" / "mols"
         output_path = pose_output_dir / f"pre_affinity_{fname}.npz"
+        if not complex_file.exists():
+            try:
+                docked_pdbqt = self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt"
+                self._preprocess_docked_structures(ligand_idx, docked_pdbqt)
+            except Exception as e:
+                print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
+                return None
         if output_path.exists() and not self.boltz_override:
             print(f"Skipping structure preparation for pose {pose_idx} because it already exists")
             return pose_output_dir
@@ -641,7 +672,15 @@ class Boltzina:
         for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
-            self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
+            all_exist = True
+            for pose_idx in self.pose_idxs:
+                fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+                if not (self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json").exists():
+                    all_exist = False
+                    break
+            if not all_exist:
+                ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+                self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
 
         # Process boltz input and prepare structures
         record_ids = []
@@ -653,8 +692,14 @@ class Boltzina:
 
             for pose_idx in self.pose_idxs:
                 fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
-                record_ids.append(fname)
+                affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json"
+                pre_affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz"
+                if affinity_file.exists() and not self.boltz_override:
+                    continue
                 self._prepare_structure(complex_file, pose_idx, ligand_idx)
+                if not pre_affinity_file.exists():
+                    continue
+                record_ids.append(fname)
                 self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
         # Update manifest and link constraints
