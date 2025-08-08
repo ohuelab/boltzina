@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--vina_override", action="store_true", help="Override results of AutoDock Vina")
     parser.add_argument("--boltz_override", action="store_true", help="Override results of Boltz-2 Scoring")
     parser.add_argument("--use_kernels", action="store_true", help="Use Boltz-2 kernels for scoring")
+    parser.add_argument("--skip_docking", action="store_true", help="Skip docking")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
@@ -54,6 +55,7 @@ def main():
         scoring_only=scoring_only,
         prepared_mols_file=prepared_mols_file,
         use_kernels=args.use_kernels,
+        skip_docking = args.skip_docking
     )
 
     boltzina.run(ligand_files)

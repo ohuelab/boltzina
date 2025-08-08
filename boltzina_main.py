@@ -1,10 +1,12 @@
 import os
+import gc
 import subprocess
 import pickle
 import json
 import csv
 import copy
 import torch
+from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from multiprocessing import Pool
@@ -40,6 +42,7 @@ class Boltzina:
         skip_docking: bool = False,
         skip_run_structure: bool = True,
         use_kernels: bool = False,
+        clean_intermediate_files: bool = False,
         prepared_mols_file: Optional[str] = None,
     ):
         self.receptor_pdb = Path(receptor_pdb)
@@ -63,14 +66,11 @@ class Boltzina:
         self.skip_run_structure = skip_run_structure
         self.use_kernels = use_kernels
         self.timeout = timeout
+        self.clean_intermediate_files = clean_intermediate_files
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
-        if prepared_mols_file:
-            with open(prepared_mols_file, "rb") as f:
-                self.mol_dict = pickle.load(f)
-        else:
-            self.mol_dict = None
+        self.mol_dict = None
 
         self.ligand_files = []
         # Prepare receptor PDBQT file
@@ -171,15 +171,19 @@ class Boltzina:
 
         if not self.skip_docking:
             if self.num_workers == 1:
-                for task in prep_tasks:
+                for task in tqdm(prep_tasks, desc="Preparing ligands"):
                     self._prepare_ligand(task)
             else:
                 with Pool(self.num_workers) as pool:
-                    pool.map(self._prepare_ligand, prep_tasks)
+                    list(tqdm(pool.imap(self._prepare_ligand, prep_tasks), total=len(prep_tasks), desc="Preparing ligands"))
         else:
             print("Skipping docking...")
 
         self.ccd = self._load_ccd()
+        if self.prepared_mols_file:
+            with open(self.prepared_mols_file, "rb") as f:
+                self.mol_dict = pickle.load(f)
+
         for idx, ligand_file in enumerate(ligand_files):
             all_exist = True
             for pose_idx in self.pose_idxs:
@@ -211,11 +215,13 @@ class Boltzina:
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
         (self.output_dir / "boltz_out" / "processed").mkdir(parents=True, exist_ok=True)
 
-        prepared_dirs = []
-        for complex_file, pose_idx, ligand_idx in structure_tasks:
-            result = self._prepare_structure(complex_file, pose_idx, ligand_idx)
-            self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
-            prepared_dirs.append(result)
+        for complex_file, pose_idx, ligand_idx in tqdm(structure_tasks, desc="Preparing structures"):
+            self._prepare_structure(complex_file, pose_idx, ligand_idx)
+
+        # clean CCD and mol_dict
+        self.ccd = None
+        self.mol_dict = None
+        gc.collect()
 
         record_ids = []
         for idx, ligand_file in enumerate(ligand_files):
@@ -242,7 +248,8 @@ class Boltzina:
         self._extract_results()
 
         # Clean up intermediate files after scoring
-        self._cleanup_scoring_intermediates()
+        if self.clean_intermediate_files:
+            self._cleanup_scoring_intermediates()
 
     def _prepare_ligand(self, task_data):
         """Prepare ligand task for multiprocessing"""
@@ -261,7 +268,8 @@ class Boltzina:
             self._preprocess_docked_structures(idx, docked_pdbqt)
 
             # Clean up intermediate files (keep docked.pdbqt)
-            self._cleanup_vina_intermediates(ligand_output_dir)
+            if self.clean_intermediate_files:
+                self._cleanup_vina_intermediates(ligand_output_dir)
 
             # Touch done file only on successful completion
             (ligand_output_dir / "done").touch()
@@ -301,7 +309,7 @@ class Boltzina:
             "--config", str(self.config),
         ]
         try:
-            subprocess.run(cmd, check=True, timeout=self.timeout, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, timeout=self.timeout)
             if not output_pdbqt.exists():
                 raise RuntimeError(f"Vina failed to create output file: {output_pdbqt}")
         except subprocess.TimeoutExpired:
@@ -336,13 +344,11 @@ class Boltzina:
             raise RuntimeError(f"Unexpected error during PDBQT to PDB conversion: {e}")
 
         # Process each docked pose
-        for pdb_file in docked_ligands_dir.glob("docked_ligand_*.pdb"):
-            if pdb_file.name.endswith("_prep.pdb") or pdb_file.name.endswith("_complex.pdb"):
+        for pose_idx in self.pose_idxs:
+            pdb_file = docked_ligands_dir / f"docked_ligand_{pose_idx}.pdb"
+            if not pdb_file.exists():
                 continue
 
-            pose_idx = pdb_file.stem.split("_")[-1]
-            if str(pose_idx) not in self.pose_idxs:
-                continue
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
             base_name = f"docked_ligand_{pose_idx}"
             self._process_pose(ligand_output_dir, base_name, pdb_file)
@@ -354,7 +360,8 @@ class Boltzina:
         complex_file = docked_ligands_dir / f"{base_name}_B_complex.pdb"
         complex_cif = docked_ligands_dir / f"{base_name}_B_complex.cif"
         complex_fix_cif = docked_ligands_dir / f"{base_name}_B_complex_fix.cif"
-
+        if complex_fix_cif.exists() and not self.vina_override:
+            return
         # Process with pdb_chain and pdb_rplresname
         try:
             if self.input_ligand_name != self.base_ligand_name:
@@ -458,13 +465,14 @@ class Boltzina:
         with open(self.output_dir / "boltz_out" / "processed" / f"manifest.json", "w") as f:
             json.dump(manifest, f, indent=4)
 
+    def _prepare_structure_parallel(self, task_data):
+        complex_file, pose_idx, ligand_idx = task_data
+        return self._prepare_structure(complex_file, pose_idx, ligand_idx)
+
     def _prepare_structure(self, complex_file: Path, pose_idx: str, ligand_idx: int) -> Optional[Path]:
         """Prepare structure by parsing MMCIF and saving structure data"""
         fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
         pose_output_dir = self.output_dir / "boltz_out" / "predictions" / fname
-        pose_output_dir.mkdir(parents=True, exist_ok=True)
-        extra_mols_dir = self.output_dir / "out" / str(ligand_idx) / "boltz_out" / "mols"
-        output_path = pose_output_dir / f"pre_affinity_{fname}.npz"
         if not complex_file.exists():
             try:
                 docked_pdbqt = self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt"
@@ -472,12 +480,14 @@ class Boltzina:
             except Exception as e:
                 print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
                 return None
+        output_path = pose_output_dir / f"pre_affinity_{fname}.npz"
         if output_path.exists() and not self.boltz_override:
             print(f"Skipping structure preparation for pose {pose_idx} because it already exists")
             return pose_output_dir
+        pose_output_dir.mkdir(parents=True, exist_ok=True)
+        extra_mols_dir = self.output_dir / "out" / str(ligand_idx) / "boltz_out" / "mols"
         try:
             # Parse MMCIF structure
-            assert self.ccd.get(self.base_ligand_name) is None, f"CCD must not contain {self.base_ligand_name} for pose {pose_idx}"
             parsed_structure = parse_mmcif(
                 path=str(complex_file),
                 mols=self.ccd,
@@ -495,6 +505,9 @@ class Boltzina:
         except Exception as e:
             print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
             return None
+        finally:
+            if self.clean_intermediate_files:
+                self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
     def _score_poses(self):
         """Score a single pose"""
@@ -512,7 +525,7 @@ class Boltzina:
             constraints_dir=str(constraints_dir),
             extra_mols_dir=extra_mols_dir,
             manifest_path = self.output_dir / "boltz_out" / "processed" / "manifest.json",
-            num_workers=max(min(os.cpu_count(), 4), self.num_workers),
+            num_workers=4,
             batch_size=self.batch_size,
             seed = self.seed,
         )
@@ -705,7 +718,8 @@ class Boltzina:
                 if not pre_affinity_file.exists():
                     continue
                 record_ids.append(fname)
-                self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
+                if self.clean_intermediate_files:
+                    self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
         # Update manifest and link constraints
         self._update_manifest(record_ids)
@@ -719,7 +733,8 @@ class Boltzina:
         self._extract_results()
 
         # Clean up intermediate files after scoring
-        self._cleanup_scoring_intermediates()
+        if self.clean_intermediate_files:
+            self._cleanup_scoring_intermediates()
 
 
 
