@@ -25,6 +25,7 @@ class Boltzina:
         config: str,
         mgl_path: Optional[str] = None,
         work_dir: Optional[str] = None,
+        seed: Optional[int] = None,
         num_workers: int = 4,
         batch_size: int = 4,
         num_boltz_poses: int = 1,
@@ -38,6 +39,7 @@ class Boltzina:
         scoring_only: bool = False,
         skip_docking: bool = False,
         skip_run_structure: bool = True,
+        use_kernels: bool = False,
         prepared_mols_file: Optional[str] = None,
     ):
         self.receptor_pdb = Path(receptor_pdb)
@@ -45,6 +47,7 @@ class Boltzina:
         self.config = Path(config)
         self.mgl_path = Path(mgl_path)
         self.work_dir = Path(work_dir)
+        self.seed = seed
         self.vina_override = vina_override
         self.boltz_override = boltz_override
         self.num_workers = num_workers
@@ -58,6 +61,7 @@ class Boltzina:
         self.scoring_only = scoring_only
         self.skip_docking = skip_docking
         self.skip_run_structure = skip_run_structure
+        self.use_kernels = use_kernels
         self.timeout = timeout
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -185,7 +189,7 @@ class Boltzina:
                     break
             if not all_exist:
                 ligand_output_dir = self.output_dir / "out" / str(idx)
-                self._update_ccd_for_ligand(ligand_output_dir, ligand_file)
+                self._update_ccd_for_ligand(ligand_output_dir, Path(ligand_file))
 
         print("Preparing structures for scoring...")
         structure_tasks = []
@@ -499,7 +503,7 @@ class Boltzina:
         extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
         constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
         # Run Boltzina scoring directly with predict_affinity
-        self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure)
+        self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure, use_kernels=self.use_kernels)
         predict_affinity(
             work_dir,
             model_module=self.boltz_model,
@@ -510,6 +514,7 @@ class Boltzina:
             manifest_path = self.output_dir / "boltz_out" / "processed" / "manifest.json",
             num_workers=max(min(os.cpu_count(), 4), self.num_workers),
             batch_size=self.batch_size,
+            seed = self.seed,
         )
 
     def _extract_docking_score(self, docked_pdbqt: Path, pose_idx: int) -> Optional[float]:

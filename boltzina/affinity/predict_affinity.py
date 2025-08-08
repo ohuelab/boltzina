@@ -9,7 +9,7 @@ from boltzina.model.models.boltz2 import Boltz2
 from boltzina.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltzina.data.write.writer import BoltzAffinityWriter
 
-def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False):
+def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False, use_kernels=False):
     """Load and return a Boltz2 model for affinity prediction.
 
     Args:
@@ -64,11 +64,13 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         ema=False,
         pairformer_args=asdict(pairformer_args),
         msa_args=asdict(msa_args),
-        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False},
+        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False, "guidance_update": False},
         affinity_mw_correction=affinity_mw_correction,
         skip_run_structure = skip_run_structure,
-        confidence_prediction = confidence_prediction
+        confidence_prediction = True,
+        use_kernels=use_kernels,
     )
+    model_module.confidence_prediction = confidence_prediction
     model_module.eval()
 
     return model_module
