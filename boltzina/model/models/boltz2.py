@@ -103,7 +103,7 @@ class Boltz2(LightningModule):
         log_loss_every_steps: int = 50,
         checkpoint_diffusion_conditioning: bool = False,
         use_templates_v2: bool = False,
-        use_kernels: bool = False,
+        use_trifast: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
@@ -160,7 +160,7 @@ class Boltz2(LightningModule):
         self.is_template_compiled = False
 
         # Kernels
-        self.use_kernels = use_kernels
+        self.use_trifast = use_trifast
 
         # Input embeddings
         full_embedder_args = {
@@ -363,7 +363,7 @@ class Boltz2(LightningModule):
             torch.cuda.is_available()
             and torch.cuda.get_device_properties(torch.device("cuda")).major >= 8.0  # noqa: PLR2004
         ):
-            self.use_kernels = False
+            self.use_trifast = False
 
         if (
             stage != "predict"
@@ -462,7 +462,7 @@ class Boltz2(LightningModule):
                                 template_module = self.template_module
 
                             z = z + template_module(
-                                z, feats, pair_mask, use_kernels=self.use_kernels
+                                z, feats, pair_mask, use_trifast=self.use_trifast
                             )
 
                         if self.is_msa_compiled and not self.training:
@@ -471,7 +471,7 @@ class Boltz2(LightningModule):
                             msa_module = self.msa_module
 
                         z = z + msa_module(
-                            z, s_inputs, feats, use_kernels=self.use_kernels
+                            z, s_inputs, feats, use_trifast=self.use_trifast
                         )
 
                         # Revert to uncompiled version for validation
@@ -485,7 +485,7 @@ class Boltz2(LightningModule):
                             z,
                             mask=mask,
                             pair_mask=pair_mask,
-                            use_kernels=self.use_kernels,
+                            use_trifast=self.use_trifast,
                         )
 
             pdistogram = self.distogram_module(z)
@@ -601,7 +601,7 @@ class Boltz2(LightningModule):
                     ),
                     multiplicity=diffusion_samples,
                     run_sequentially=run_confidence_sequentially,
-                    use_kernels=self.use_kernels,
+                    use_trifast=self.use_trifast,
                 )
             )
 
@@ -636,7 +636,7 @@ class Boltz2(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         multiplicity=1,
-                        use_kernels=self.use_kernels,
+                        use_trifast=self.use_trifast,
                     )
 
                     dict_out_affinity1["affinity_probability_binary"] = (
@@ -650,7 +650,7 @@ class Boltz2(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         multiplicity=1,
-                        use_kernels=self.use_kernels,
+                        use_trifast=self.use_trifast,
                     )
                     dict_out_affinity2["affinity_probability_binary"] = (
                         torch.nn.functional.sigmoid(
@@ -709,7 +709,7 @@ class Boltz2(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         multiplicity=1,
-                        use_kernels=self.use_kernels,
+                        use_trifast=self.use_trifast,
                     )
                     dict_out.update(
                         {

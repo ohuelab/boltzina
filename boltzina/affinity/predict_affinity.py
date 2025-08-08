@@ -1,4 +1,3 @@
-
 from pathlib import Path
 from dataclasses import asdict
 from boltz.main import Boltz2DiffusionParams, PairformerArgsV2, MSAModuleArgs, get_cache_path
@@ -68,7 +67,7 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         affinity_mw_correction=affinity_mw_correction,
         skip_run_structure = skip_run_structure,
         confidence_prediction = True,
-        use_kernels=use_kernels,
+        use_trifast=use_kernels,
     )
     model_module.confidence_prediction = confidence_prediction
     model_module.eval()
