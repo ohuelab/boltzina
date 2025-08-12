@@ -8,7 +8,7 @@ from boltzina.model.models.boltz2 import Boltz2
 from boltzina.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltzina.data.write.writer import BoltzAffinityWriter
 
-def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False, use_kernels=False):
+def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False, use_kernels=False, run_trunk_and_structure=True, predict_affinity_args = None, pairformer_args = None, msa_args = None, steering_args = None, diffusion_process_args = None):
     """Load and return a Boltz2 model for affinity prediction.
 
     Args:
@@ -34,38 +34,40 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         raise FileNotFoundError(f"Affinity checkpoint not found at {affinity_checkpoint}")
 
     predict_affinity_args = {
-        "recycling_steps": 5,
+        "recycling_steps": 1,
         "sampling_steps": sampling_steps_affinity,
         "diffusion_samples": diffusion_samples_affinity,
         "max_parallel_samples": 1,
         "write_confidence_summary": False,
         "write_full_pae": False,
         "write_full_pde": False,
-    }
+    } if predict_affinity_args is None else predict_affinity_args
 
-    diffusion_params = Boltz2DiffusionParams()
+    diffusion_params = asdict(Boltz2DiffusionParams()) if diffusion_process_args is None else diffusion_process_args
     step_scale = 1.5 if step_scale is None else step_scale
-    diffusion_params.step_scale = step_scale
-    pairformer_args = PairformerArgsV2()
+    diffusion_params["step_scale"] = step_scale
 
-    msa_args = MSAModuleArgs(
+    pairformer_args = asdict(PairformerArgsV2()) if pairformer_args is None else pairformer_args
+
+    msa_args = asdict(MSAModuleArgs(
         subsample_msa=subsample_msa,
         num_subsampled_msa=num_subsampled_msa,
         use_paired_feature=model == "boltz2",
-    )
+    )) if msa_args is None else msa_args
 
     model_module = Boltz2.load_from_checkpoint(
         affinity_checkpoint,
         strict=True,
         predict_args=predict_affinity_args,
         map_location="cpu",
-        diffusion_process_args=asdict(diffusion_params),
+        diffusion_process_args=diffusion_params,
         ema=False,
-        pairformer_args=asdict(pairformer_args),
-        msa_args=asdict(msa_args),
-        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False, "guidance_update": False},
+        pairformer_args=pairformer_args,
+        msa_args=msa_args,
+        steering_args={"fk_steering": False, "physical_guidance_update": False, "contact_guidance_update": False, "guidance_update": False} if steering_args is None else steering_args,
         affinity_mw_correction=affinity_mw_correction,
         skip_run_structure = skip_run_structure,
+        run_trunk_and_structure = run_trunk_and_structure,
         confidence_prediction = True,
         use_trifast=use_kernels,
     )
