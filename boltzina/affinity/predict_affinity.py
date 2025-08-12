@@ -34,7 +34,7 @@ def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, dif
         raise FileNotFoundError(f"Affinity checkpoint not found at {affinity_checkpoint}")
 
     predict_affinity_args = {
-        "recycling_steps": 1,
+        "recycling_steps": 5,
         "sampling_steps": sampling_steps_affinity,
         "diffusion_samples": diffusion_samples_affinity,
         "max_parallel_samples": 1,
