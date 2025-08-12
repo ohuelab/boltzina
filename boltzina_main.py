@@ -42,8 +42,14 @@ class Boltzina:
         skip_docking: bool = False,
         skip_run_structure: bool = True,
         use_kernels: bool = False,
-        clean_intermediate_files: bool = False,
+        clean_intermediate_files: bool = True,
         prepared_mols_file: Optional[str] = None,
+        predict_affinity_args: Optional[dict] = None,
+        pairformer_args: Optional[dict] = None,
+        msa_args: Optional[dict] = None,
+        steering_args: Optional[dict] = None,
+        diffusion_process_args: Optional[dict] = None,
+        run_trunk_and_structure: bool = True,
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
@@ -67,6 +73,12 @@ class Boltzina:
         self.use_kernels = use_kernels
         self.timeout = timeout
         self.clean_intermediate_files = clean_intermediate_files
+        self.predict_affinity_args = predict_affinity_args
+        self.pairformer_args = pairformer_args
+        self.msa_args = msa_args
+        self.steering_args = steering_args
+        self.diffusion_process_args = diffusion_process_args
+        self.run_trunk_and_structure = run_trunk_and_structure
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
@@ -223,6 +235,10 @@ class Boltzina:
         self.mol_dict = None
         gc.collect()
 
+        if self.clean_intermediate_files:
+            for complex_file, pose_idx, ligand_idx in tqdm(structure_tasks, desc="Preparing structures"):
+                    self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
+
         record_ids = []
         for idx, ligand_file in enumerate(ligand_files):
             ligand_path = Path(ligand_file)
@@ -256,13 +272,14 @@ class Boltzina:
         idx, ligand_path, ligand_output_dir = task_data
 
         try:
-            # Convert ligand to PDBQT format if needed
             ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
-            self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
-
-            # Run Vina docking
             docked_pdbqt = ligand_output_dir / "docked.pdbqt"
-            self._run_vina(ligand_pdbqt, docked_pdbqt)
+            if not docked_pdbqt.exists():
+                # Convert ligand to PDBQT format if needed
+                self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
+
+                # Run Vina docking
+                self._run_vina(ligand_pdbqt, docked_pdbqt)
 
             # Preprocess docked structures
             self._preprocess_docked_structures(idx, docked_pdbqt)
@@ -505,9 +522,6 @@ class Boltzina:
         except Exception as e:
             print(f"Error preparing structure for complex {complex_file} and pose {pose_idx}: {e}")
             return None
-        finally:
-            if self.clean_intermediate_files:
-                self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
     def _score_poses(self):
         """Score a single pose"""
@@ -516,7 +530,7 @@ class Boltzina:
         extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
         constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
         # Run Boltzina scoring directly with predict_affinity
-        self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure, use_kernels=self.use_kernels)
+        self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure, use_kernels=self.use_kernels, run_trunk_and_structure=self.run_trunk_and_structure, predict_affinity_args=self.predict_affinity_args, pairformer_args=self.pairformer_args, msa_args=self.msa_args, steering_args=self.steering_args, diffusion_process_args=self.diffusion_process_args)
         predict_affinity(
             work_dir,
             model_module=self.boltz_model,
@@ -718,7 +732,10 @@ class Boltzina:
                 if not pre_affinity_file.exists():
                     continue
                 record_ids.append(fname)
-                if self.clean_intermediate_files:
+
+        if self.clean_intermediate_files:
+            for ligand_idx, pdb_file in enumerate(self.ligand_files):
+                for pose_idx in self.pose_idxs:
                     self._cleanup_preaffinity_intermediates(pose_idx, ligand_idx)
 
         # Update manifest and link constraints

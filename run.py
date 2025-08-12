@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--use_kernels", action="store_true", help="Use Boltz-2 kernels for scoring")
     parser.add_argument("--skip_docking", action="store_true", help="Skip docking")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
+    parser.add_argument("--skip_trunk_and_structure", action="store_true", help="Skip running trunk and structure")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
     with open(args.config, "r") as f:
@@ -32,6 +33,12 @@ def main():
     float32_matmul_precision = config_dict.get("float32_matmul_precision", args.float32_matmul_precision)
     scoring_only = config_dict.get("scoring_only", False)
     prepared_mols_file = config_dict.get("prepared_mols_file", None)
+    predict_affinity_args = config_dict.get("predict_affinity_args", None)
+    pairformer_args = config_dict.get("pairformer_args", None)
+    msa_args = config_dict.get("msa_args", None)
+    steering_args = config_dict.get("steering_args", None)
+    diffusion_process_args = config_dict.get("diffusion_process_args", None)
+    run_trunk_and_structure = not args.skip_trunk_and_structure
     print("--------------------------------")
     print(f"Output directory: {output_dir}")
     print(f"Seed: {seed}")
@@ -55,7 +62,13 @@ def main():
         scoring_only=scoring_only,
         prepared_mols_file=prepared_mols_file,
         use_kernels=args.use_kernels,
-        skip_docking = args.skip_docking
+        predict_affinity_args=predict_affinity_args,
+        pairformer_args=pairformer_args,
+        msa_args=msa_args,
+        steering_args=steering_args,
+        diffusion_process_args=diffusion_process_args,
+        skip_docking = args.skip_docking,
+        run_trunk_and_structure = run_trunk_and_structure
     )
 
     boltzina.run(ligand_files)
