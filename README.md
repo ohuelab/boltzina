@@ -1,5 +1,5 @@
 # Boltzina
-
+![png](https://arxiv.org/html/2508.17555v1/x1.png)
 Boltzina is a pipeline that combines AutoDock Vina docking with Boltz-2 scoring for molecular docking and affinity prediction.
 
 ## Modes
@@ -53,3 +53,6 @@ The configuration file should be a JSON file with the following required fields:
 - **`output_dir`**: Directory where final results will be saved
 - **`receptor_pdb`**: Path to the receptor PDB file
 - **`ligand_files`**: Array of paths to ligand files (Now only supports PDB format)
+
+## Reference
+Furui K, Ohue M. Boltzina: Efficient and Accurate Virtual Screening via Docking-Guided Binding Prediction with Boltz-2, arXiv (preprint) 2025. https://doi.org/10.48550/arXiv.2508.17555
