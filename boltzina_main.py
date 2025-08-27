@@ -15,7 +15,7 @@ from rdkit import Chem
 import shutil
 Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
-from boltzina.affinity.mmcif import parse_mmcif
+from boltzina.data.parse.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
 from boltz.main import get_cache_path
 
@@ -29,6 +29,7 @@ class Boltzina:
         work_dir: Optional[str] = None,
         seed: Optional[int] = None,
         num_workers: int = 4,
+        vina_cpu: int = 1,
         batch_size: int = 4,
         num_boltz_poses: int = 1,
         timeout: int = 300,
@@ -49,7 +50,7 @@ class Boltzina:
         msa_args: Optional[dict] = None,
         steering_args: Optional[dict] = None,
         diffusion_process_args: Optional[dict] = None,
-        run_trunk_and_structure: bool = True,
+        run_trunk_and_structure: bool = True, # Strongly recommended to be True
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
@@ -186,7 +187,8 @@ class Boltzina:
                 for task in tqdm(prep_tasks, desc="Preparing ligands"):
                     self._prepare_ligand(task)
             else:
-                with Pool(self.num_workers) as pool:
+                ligand_num_workers = self.num_workers // self.vina_cpu
+                with Pool(ligand_num_workers) as pool:
                     list(tqdm(pool.imap(self._prepare_ligand, prep_tasks), total=len(prep_tasks), desc="Preparing ligands"))
         else:
             print("Skipping docking...")
@@ -324,6 +326,7 @@ class Boltzina:
             "--ligand", str(ligand_pdbqt),
             "--out", str(output_pdbqt),
             "--config", str(self.config),
+            "--cpu", str(self.vina_cpu),
         ]
         try:
             subprocess.run(cmd, check=True, timeout=self.timeout)
