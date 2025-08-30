@@ -2,12 +2,22 @@
 ![png](https://arxiv.org/html/2508.17555v1/x1.png)
 Boltzina is a pipeline that combines AutoDock Vina docking with Boltz-2 scoring for molecular docking and affinity prediction.
 
+## Installation
+
+```bash
+uv venv
+uv sync
+```
+
+* [MGLTools](https://ccsb.scripps.edu/mgltools/)
+* [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina/)
+
 ## Modes
 
 Boltzina supports two operation modes:
 
 1. **Full docking mode**: Performs AutoDock Vina docking followed by Boltz-2 scoring
-2. **Scoring-only mode**: Scores pre-existing ligand poses using only Boltz-2 (no docking)
+2. **Scoring-only mode**: Scores pre-existing ligand poses using only Boltz-2 (no docking) [TODO: Not yet validated]
 
 ## Usage
 

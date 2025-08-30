@@ -4,7 +4,6 @@ import argparse
 from boltzina_main import Boltzina
 from pathlib import Path
 
-MGL_PATH = "/PATH/TO/mgltools_x86_64Linux2_1.5.7"
 
 def main():
     parser = argparse.ArgumentParser()
@@ -18,6 +17,7 @@ def main():
     parser.add_argument("--skip_docking", action="store_true", help="Skip docking")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
     parser.add_argument("--skip_trunk_and_structure", action="store_true", help="Skip running trunk and structure")
+    parser.add_argument("--mgl_path", type=str, default=None, help="Path to MGLTools")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
     with open(args.config, "r") as f:
@@ -49,7 +49,7 @@ def main():
         receptor_pdb=receptor_pdb,
         output_dir=output_dir,
         config=config,
-        mgl_path=MGL_PATH,
+        mgl_path=args.mgl_path,
         work_dir=work_dir,
         input_ligand_name=input_ligand_name,
         fname=fname,
