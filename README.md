@@ -11,6 +11,7 @@ uv sync
 
 * [MGLTools](https://ccsb.scripps.edu/mgltools/)
 * [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina/)
+* [MAXIT](https://sw-tools.rcsb.org/apps/MAXIT/)
 
 ## Modes
 
