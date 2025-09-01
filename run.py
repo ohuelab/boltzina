@@ -10,6 +10,7 @@ def main():
     parser.add_argument("config", type=str)
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for Boltz-2 Scoring, batch_size = 1 is strongly recommended")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for AutoDock Vina")
+    parser.add_argument("--vina_cpu", type=int, default=1, help="Number of CPUs for AutoDock Vina")
     parser.add_argument("--seed", type=int, default=None, help="Seed for random number generator")
     parser.add_argument("--vina_override", action="store_true", help="Override results of AutoDock Vina")
     parser.add_argument("--boltz_override", action="store_true", help="Override results of Boltz-2 Scoring")
@@ -17,7 +18,6 @@ def main():
     parser.add_argument("--skip_docking", action="store_true", help="Skip docking")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
     parser.add_argument("--skip_trunk_and_structure", action="store_true", help="Skip running trunk and structure")
-    parser.add_argument("--mgl_path", type=str, default=None, help="Path to MGLTools")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
     with open(args.config, "r") as f:
@@ -49,7 +49,6 @@ def main():
         receptor_pdb=receptor_pdb,
         output_dir=output_dir,
         config=config,
-        mgl_path=args.mgl_path,
         work_dir=work_dir,
         input_ligand_name=input_ligand_name,
         fname=fname,
@@ -57,6 +56,7 @@ def main():
         vina_override=args.vina_override,
         boltz_override=args.boltz_override,
         num_workers=args.num_workers,
+        vina_cpu=args.vina_cpu,
         batch_size=args.batch_size,
         float32_matmul_precision=float32_matmul_precision,
         scoring_only=scoring_only,

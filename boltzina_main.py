@@ -25,7 +25,6 @@ class Boltzina:
         receptor_pdb: str,
         output_dir: str,
         config: str,
-        mgl_path: Optional[str] = None,
         work_dir: Optional[str] = None,
         seed: Optional[int] = None,
         num_workers: int = 4,
@@ -55,7 +54,6 @@ class Boltzina:
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config)
-        self.mgl_path = Path(mgl_path)
         self.work_dir = Path(work_dir)
         self.seed = seed
         self.vina_override = vina_override
@@ -84,6 +82,7 @@ class Boltzina:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
         self.mol_dict = None
+        self.vina_cpu = vina_cpu
 
         self.ligand_files = []
         # Prepare receptor PDBQT file
@@ -104,52 +103,40 @@ class Boltzina:
         self.fname = self._get_fname() if fname is None else fname
         torch.set_float32_matmul_precision(self.float32_matmul_precision)
 
+
     def _prepare_receptor(self) -> Path:
-        """Prepare receptor PDBQT file using prepare_receptor4.py"""
+        """Prepare receptor PDBQT file using Meeko (mk_prepare_receptor.py)"""
         receptor_pdbqt = self.output_dir / "receptor.pdbqt"
         if receptor_pdbqt.exists() and not self.vina_override:
             print(f"Skipping receptor preparation for {receptor_pdbqt} because it already exists")
             return receptor_pdbqt
 
-        # Use provided mgl_path or find MGL_PATH (try environment variable or common locations)
-        mgl_path = self.mgl_path or os.environ.get('MGL_PATH')
-        if not mgl_path:
-            # Try common installation paths
-            possible_paths = [
-                "/usr/local/mgltools",
-                "/opt/mgltools",
-                os.path.expanduser("~/mgltools")
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    mgl_path = path
-                    break
+        mk_prepare = shutil.which("mk_prepare_receptor.py") or shutil.which("mk_prepare_receptor")
+        if mk_prepare is None:
+            raise RuntimeError(
+                "mk_prepare_receptor.py not found. Install Meeko (e.g., `pip install meeko`) "
+                "and ensure your PATH includes the script."
+            )
 
-        if not mgl_path or not os.path.exists(mgl_path):
-            raise RuntimeError("MGL_PATH not found. Please provide mgl_path parameter, set MGL_PATH environment variable, or install MGLTools.")
+        out_base = str(self.output_dir / "receptor")
 
-        prepare_receptor_script = f"{mgl_path}/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py"
-        pythonsh = f"{mgl_path}/bin/pythonsh"
-
-        if not os.path.exists(prepare_receptor_script):
-            raise RuntimeError(f"prepare_receptor4.py not found at {prepare_receptor_script}")
-
-        # Set up environment
-        env = os.environ.copy()
-        env['LD_LIBRARY_PATH'] = f"{mgl_path}/lib"
-
-        # Run prepare_receptor4.py
         cmd = [
-            pythonsh,
-            prepare_receptor_script,
-            "-r", str(self.receptor_pdb),
-            "-o", str(receptor_pdbqt)
+            mk_prepare,
+            "-i", str(self.receptor_pdb),
+            "-o", out_base,
+            "-p",
         ]
+        subprocess.run(cmd, check=True)
 
-        subprocess.run(cmd, env=env, check=True)
+        produced = Path(out_base + ".pdbqt")
+        if not produced.exists():
+            produced = receptor_pdbqt
 
-        if not receptor_pdbqt.exists():
-            raise RuntimeError(f"Failed to create receptor PDBQT file: {receptor_pdbqt}")
+        if not produced.exists():
+            raise RuntimeError(f"Failed to create receptor PDBQT file: expected {out_base+'.pdbqt'}")
+
+        if produced != receptor_pdbqt:
+            produced.replace(receptor_pdbqt)
 
         return receptor_pdbqt
 
@@ -766,7 +753,6 @@ def main():
     parser.add_argument("--ligands", required=True, nargs="+", help="Ligand files (SDF/MOL2/SMI)")
     parser.add_argument("--output_dir", required=True, help="Output directory")
     parser.add_argument("--config", required=True, help="Vina config file")
-    parser.add_argument("--mgl_path", help="Path to MGLTools installation directory")
     parser.add_argument("--work_dir", help="Working directory for Boltz results")
     parser.add_argument("--vina_override", action="store_true", help="Override existing Vina output directory")
     parser.add_argument("--boltz_override", action="store_true", help="Override existing Boltz output directory")
@@ -780,7 +766,6 @@ def main():
         receptor_pdb=args.receptor,
         output_dir=args.output_dir,
         config=args.config,
-        mgl_path=args.mgl_path,
         work_dir=args.work_dir,
         vina_override=args.vina_override,
         boltz_override=args.boltz_override,

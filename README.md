@@ -5,13 +5,19 @@ Boltzina is a pipeline that combines AutoDock Vina docking with Boltz-2 scoring 
 ## Installation
 
 ```bash
+# Using uv (recommended)
 uv venv
 uv sync
+
+# Or using pip
+pip install .
 ```
 
-* [MGLTools](https://ccsb.scripps.edu/mgltools/)
-* [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina/)
-* [MAXIT](https://sw-tools.rcsb.org/apps/MAXIT/)
+Related environments including AutoDock Vina, Maxit, and Boltz-2 model checkpoint files can be installed with the following command:
+```bash
+./setup.sh
+```
+
 
 ## Modes
 
@@ -27,6 +33,8 @@ Run the pipeline using a configuration file:
 ```bash
 python run.py sample/CDK2/config.json
 ```
+
+For input file formats, please refer to `INPUT_FORMAT.md`. We plan to create more detailed tutorials in the future.
 
 ## Command Line Options
 
