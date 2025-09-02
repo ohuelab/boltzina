@@ -24,7 +24,7 @@ Related environments including AutoDock Vina, Maxit, and Boltz-2 model checkpoin
 Boltzina supports two operation modes:
 
 1. **Full docking mode**: Performs AutoDock Vina docking followed by Boltz-2 scoring
-2. **Scoring-only mode**: Scores pre-existing ligand poses using only Boltz-2 (no docking) [TODO: Not yet validated]
+2. **Scoring-only mode**: Scores pre-existing ligand poses using only Boltz-2 (no docking)
 
 ## Usage
 
@@ -32,6 +32,11 @@ Run the pipeline using a configuration file:
 
 ```bash
 python run.py sample/CDK2/config.json
+```
+
+Example for scoring mode:
+```bash
+python run.py sample/CDK2/config_scoring.json
 ```
 
 For input file formats, please refer to `INPUT_FORMAT.md`. We plan to create more detailed tutorials in the future.

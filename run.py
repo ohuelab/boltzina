@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--skip_docking", action="store_true", help="Skip docking")
     parser.add_argument("--float32_matmul_precision", type=str, default="highest", choices=["highest", "high", "medium"], help="Precision for float32 matmul")
     parser.add_argument("--skip_trunk_and_structure", action="store_true", help="Skip running trunk and structure")
+    parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
     with open(args.config, "r") as f:
@@ -68,7 +69,8 @@ def main():
         steering_args=steering_args,
         diffusion_process_args=diffusion_process_args,
         skip_docking = args.skip_docking,
-        run_trunk_and_structure = run_trunk_and_structure
+        run_trunk_and_structure = run_trunk_and_structure,
+        clean_intermediate_files = not args.keep_intermediate_files
     )
 
     boltzina.run(ligand_files)

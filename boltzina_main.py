@@ -407,7 +407,7 @@ class Boltzina:
                 raise RuntimeError(f"Failed to create fixed CIF file: {complex_fix_cif}")
 
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Error processing pose {pdb_file}: Command failed with return code {e.returncode}")
+            raise RuntimeError(f"Error processing pose {pdb_file}: {e.stderr}")
         except Exception as e:
             raise RuntimeError(f"Unexpected error processing pose {pdb_file}: {e}")
 
@@ -681,6 +681,13 @@ class Boltzina:
         """
         self.ligand_files = ligand_files
         print(f"Running scoring-only mode for {len(self.ligand_files)} ligand poses...")
+
+        if self.ccd is None:
+            self.ccd = self._load_ccd()
+
+        if self.prepared_mols_file:
+            with open(self.prepared_mols_file, "rb") as f:
+                self.mol_dict = pickle.load(f)
 
         # Process pose files
         for ligand_idx, pdb_file in enumerate(self.ligand_files):
