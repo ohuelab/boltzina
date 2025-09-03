@@ -39,7 +39,16 @@ Example for scoring mode:
 python run.py sample/CDK2/config_scoring.json
 ```
 
-For input file formats, please refer to `INPUT_FORMAT.md`. We plan to create more detailed tutorials in the future.
+## Ligand File Format
+To generate a Boltzina-compatible input PDB file and a mols_dict pkl from SMILES, follow the steps below:
+```bash
+# Prepare ligand PDB Files
+$ python ligand_preparation.py preparation_sample/input_smiles.txt --output_dir preparation_sample
+# Run Boltzina
+$ python run.py preparation_sample/config.json
+```
+
+For input file formats, please refer to `INPUT_FORMAT.md`.
 
 ## Command Line Options
 

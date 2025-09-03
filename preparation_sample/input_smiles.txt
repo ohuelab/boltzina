@@ -1,0 +1,5 @@
+O=[N+]([O-])c1cccc(Nc2nccc(-c3cnn4ncccc34)n2)c1 CDK2_active_0
+Nc1nc(Nc2ccc(S(N)(=O)=O)cc2)nn1C(=O)c1c(F)cccc1F CDK2_active_1
+C[NH2+][C@@H]1C[C@@]2(C)O[C@@H]([C@@H]1OC)n1c3ccccc3c3c4c(c5c6ccccc6n2c5c31)C(=O)NC4 CDK2_active_2
+CC(=O)NC1CN(c2ccc(Nc3ncc(F)c(-c4cnc(C)n4C(C)C)n3)cc2)C1 CDK2_active_3
+Cc1ncc(-c2ccnc(Nc3ccc(C(=O)N4CC[C@H]([NH2+]C5CC5)C4)cc3)n2)n1C(C)C CDK2_active_4

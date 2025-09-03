@@ -1,0 +1,16 @@
+{
+    "work_dir": "sample/CDK2/boltz_results_base",
+    "vina_config": "sample/CDK2/input.txt",
+    "fname": "1ckp_cdk2",
+    "input_ligand_name": "UNL",
+    "output_dir": "preparation_sample/results",
+    "prepared_mols_file": "preparation_sample/prepared_mols.pkl",
+    "receptor_pdb": "sample/CDK2/boltz_results_base/predictions/1ckp_cdk2/1ckp_cdk2_model_0_protein.pdb",
+    "ligand_files": [
+        "preparation_sample/input_pdbs/CDK2_active_0.pdb",
+        "preparation_sample/input_pdbs/CDK2_active_1.pdb",
+        "preparation_sample/input_pdbs/CDK2_active_2.pdb",
+        "preparation_sample/input_pdbs/CDK2_active_3.pdb",
+        "preparation_sample/input_pdbs/CDK2_active_4.pdb"
+            ]
+}
