@@ -2,7 +2,7 @@
 Boltzina CLI entry point.
 
 Usage:
-    boltzina run <INPUT> [OPTIONS]       # Main pipeline (Mode A or B)
+    boltzina run <INPUT> [OPTIONS]       # Main pipeline
     boltzina prepare <INPUT> [OPTIONS]   # SMILES/SDF → PDB + pkl
     boltzina grid <STRUCT> [OPTIONS]     # Determine docking grid center
     boltzina setup [OPTIONS]             # Install/register tools
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from click_option_group import optgroup, RequiredMutuallyExclusiveOptionGroup, MutuallyExclusiveOptionGroup
 
 from boltzina import __version__
 
@@ -36,102 +37,114 @@ def main():
 
 @main.command("run")
 @click.argument("input_path", type=click.Path(exists=True))
-# --- Mode A ---
-@click.option("--sequence", "-s", default=None, help="Protein amino acid sequence (Mode A)")
-@click.option("--sequence-file", type=click.Path(exists=True), default=None,
-              help="FASTA/text file containing protein sequence (Mode A)")
-@click.option("--representative-smiles", default=None,
-              help="SMILES for Boltz-2 grid auto (Mode A; default: first SMILES in INPUT)")
-@click.option("--reference-ligand", type=click.Path(exists=True), default=None,
-              help="Reference ligand file for grid center (Mode A; overrides representative-smiles)")
-# --- Mode B ---
-@click.option("--work-dir", type=click.Path(exists=True), default=None,
-              help="Existing Boltz-2 output directory (Mode B)")
-@click.option("--receptor-pdb", type=click.Path(exists=True), default=None,
-              help="Receptor PDB (optional override; auto-extracted from work-dir if omitted)")
-# --- Grid ---
-@click.option("--grid-center", default=None,
-              help="Explicit grid center 'x,y,z' (overrides auto; valid for both modes)")
-@click.option("--grid-size", default=20.0, show_default=True,
-              help="Docking box size in Angstroms")
-@click.option("--ligand-chain-id", default="B", show_default=True,
-              help="Chain ID of the ligand in Boltz-2 prediction (for grid auto in Mode B)")
-# --- Output ---
-@click.option("--output-dir", "-o", default="./boltzina_results", show_default=True,
-              help="Output directory")
-# --- Docking ---
-@click.option("--docking-engine", default="vina", show_default=True,
-              type=click.Choice(["vina", "unidock2"]),
-              help="Docking engine")
-@click.option("--num-workers", default=1, show_default=True,
-              help="Parallel workers for Vina docking")
-@click.option("--vina-cpu", default=1, show_default=True,
-              help="CPUs per Vina worker")
-@click.option("--batch-size", default=1, show_default=True,
-              help="Batch size for Boltz-2 scoring")
-@click.option("--skip-docking", is_flag=True,
-              help="Skip docking; score existing poses only")
-@click.option("--regenerate-conformer", is_flag=True,
-              help="Force 3D conformer regeneration for SDF inputs")
-# --- Boltz-2 prediction parameters ---
-@click.option("--use-msa-server", is_flag=True,
-              help="Use mmseqs2 MSA server (requires internet; Mode A only)")
-@click.option("--msa-server-url", default="https://api.colabfold.com", show_default=True,
-              help="MSA server URL")
-@click.option("--msa-server-username", default=None,
-              help="Username for MSA server authentication")
-@click.option("--msa-server-password", default=None,
-              help="Password for MSA server authentication")
-@click.option("--msa-pairing-strategy", default="greedy", show_default=True,
-              type=click.Choice(["greedy", "complete"]),
-              help="MSA pairing strategy")
-@click.option("--recycling-steps", default=3, show_default=True,
-              help="Boltz-2 recycling steps")
-@click.option("--sampling-steps", default=200, show_default=True,
-              help="Boltz-2 sampling steps")
-@click.option("--diffusion-samples", default=1, show_default=True,
-              help="Boltz-2 diffusion samples")
-@click.option("--step-scale", default=None, type=float,
-              help="Boltz-2 step scale (default: 1.638)")
-@click.option("--max-parallel-samples", default=None, type=int,
-              help="Max parallel diffusion samples (default: same as --diffusion-samples)")
-@click.option("--subsample-msa", is_flag=True,
-              help="Subsample MSA sequences (boltz --subsample_msa)")
-@click.option("--num-subsampled-msa", default=1024, show_default=True,
-              help="Number of subsampled MSA sequences (used with --subsample-msa)")
-@click.option("--use-potentials", is_flag=True,
-              help="Use Boltz-2 inference-time potentials")
-@click.option("--max-msa-seqs", default=8192, show_default=True,
-              help="Maximum MSA sequences")
-@click.option("--no-kernels", is_flag=True,
-              help="Disable trifast kernels (use on older GPUs)")
-@click.option("--affinity-mw-correction", is_flag=True,
-              help="Apply molecular weight correction to affinity")
-# --- Other ---
-@click.option("--seed", default=None, type=int, help="Random seed")
-@click.option("--keep-intermediate-files", is_flag=True,
-              help="Keep intermediate docking/CIF files")
-@click.option("--float32-matmul-precision", default="highest",
-              type=click.Choice(["highest", "high", "medium"]),
-              help="PyTorch float32 matmul precision")
-@click.option("--vina-override", is_flag=True,
-              help="Rerun Vina even if results exist")
-@click.option("--boltz-override", is_flag=True,
-              help="Rerun Boltz-2 scoring even if results exist")
-@click.option("--ligand-prefix", default=None,
-              help="Prefix for ligand names (used when SMILES file has no name column)")
+
+# Protein input group (mutually exclusive; one required)
+@optgroup.group("Protein input", cls=RequiredMutuallyExclusiveOptionGroup,
+                help="Specify the protein target (choose one)")
+@optgroup.option("--sequence", "-s", default=None,
+                 help="Protein sequence (single chain or colon-separated multi-chain: 'SEQ1:SEQ2')")
+@optgroup.option("--sequence-file", type=click.Path(exists=True), default=None,
+                 help="FASTA file (single or multi-chain; each >entry = one protein chain)")
+@optgroup.option("--yaml", type=click.Path(exists=True), default=None,
+                 help="Boltz-2 compatible YAML (protein + ligand + affinity property)")
+@optgroup.option("--work-dir", type=click.Path(exists=True), default=None,
+                 help="Precomputed Boltz-2 output directory (docking + scoring only)")
+
+# Reference ligand (structure prediction only)
+@optgroup.group("Structure prediction options",
+                help="Options for --sequence / --sequence-file (ignored with --yaml or --work-dir)")
+@optgroup.option("--reference-ligand", default=None,
+                 help="Reference ligand: SMILES string or SDF/PDB file. "
+                      "Used for Boltz-2 complex prediction and grid center. "
+                      "Default: first ligand in INPUT.")
+@optgroup.option("--receptor-pdb", type=click.Path(exists=True), default=None,
+                 help="Receptor PDB override (rescore mode only; auto-extracted from --work-dir if omitted)")
+
+# Docking group
+@optgroup.group("Docking")
+@optgroup.option("--docking-engine", default="vina", show_default=True,
+                 type=click.Choice(["vina", "unidock2"]),
+                 help="Docking engine")
+@optgroup.option("--grid-center", default=None,
+                 help="Explicit grid center 'x,y,z' (overrides auto-detection)")
+@optgroup.option("--grid-size", default=20.0, show_default=True,
+                 help="Docking box size in Angstroms")
+@optgroup.option("--ligand-chain-id", default="B", show_default=True,
+                 help="Ligand chain ID in Boltz-2 prediction (for grid auto in --work-dir mode; "
+                      "auto-assigned in sequence mode)")
+@optgroup.option("--num-workers", default=1, show_default=True,
+                 help="Parallel workers for Vina docking")
+@optgroup.option("--vina-cpu", default=1, show_default=True,
+                 help="CPUs per Vina worker")
+@optgroup.option("--skip-docking", is_flag=True,
+                 help="Skip docking; score existing poses only")
+@optgroup.option("--regenerate-conformer", is_flag=True,
+                 help="Force 3D conformer regeneration for SDF inputs")
+
+# Boltz-2 prediction group
+@optgroup.group("Boltz-2 prediction",
+                help="Parameters for Boltz-2 structure prediction (ignored with --work-dir)")
+@optgroup.option("--use-msa-server", is_flag=True,
+                 help="Use mmseqs2 MSA server (requires internet)")
+@optgroup.option("--msa-server-url", default="https://api.colabfold.com", show_default=True,
+                 help="MSA server URL")
+@optgroup.option("--msa-server-username", default=None, help="MSA server username")
+@optgroup.option("--msa-server-password", default=None, help="MSA server password")
+@optgroup.option("--msa-pairing-strategy", default="greedy", show_default=True,
+                 type=click.Choice(["greedy", "complete"]),
+                 help="MSA pairing strategy")
+@optgroup.option("--recycling-steps", default=3, show_default=True,
+                 help="Boltz-2 recycling steps")
+@optgroup.option("--sampling-steps", default=200, show_default=True,
+                 help="Boltz-2 sampling steps")
+@optgroup.option("--diffusion-samples", default=1, show_default=True,
+                 help="Boltz-2 diffusion samples")
+@optgroup.option("--step-scale", default=None, type=float,
+                 help="Boltz-2 step scale (default: 1.638)")
+@optgroup.option("--max-parallel-samples", default=None, type=int,
+                 help="Max parallel diffusion samples")
+@optgroup.option("--subsample-msa", is_flag=True,
+                 help="Subsample MSA sequences")
+@optgroup.option("--num-subsampled-msa", default=1024, show_default=True,
+                 help="Number of subsampled MSA sequences (used with --subsample-msa)")
+@optgroup.option("--use-potentials", is_flag=True,
+                 help="Use Boltz-2 inference-time potentials")
+@optgroup.option("--max-msa-seqs", default=8192, show_default=True,
+                 help="Maximum MSA sequences")
+@optgroup.option("--no-kernels", is_flag=True,
+                 help="Disable trifast kernels (use on older GPUs)")
+@optgroup.option("--affinity-mw-correction", is_flag=True,
+                 help="Apply molecular weight correction to affinity")
+
+# Output / misc group
+@optgroup.group("Output")
+@optgroup.option("--output-dir", "-o", default="./boltzina_results", show_default=True,
+                 help="Output directory")
+@optgroup.option("--batch-size", default=1, show_default=True,
+                 help="Batch size for Boltz-2 affinity scoring")
+@optgroup.option("--seed", default=None, type=int, help="Random seed")
+@optgroup.option("--keep-intermediate-files", is_flag=True,
+                 help="Keep intermediate docking/CIF files")
+@optgroup.option("--float32-matmul-precision", default="highest",
+                 type=click.Choice(["highest", "high", "medium"]),
+                 help="PyTorch float32 matmul precision")
+@optgroup.option("--vina-override", is_flag=True,
+                 help="Rerun Vina even if results exist")
+@optgroup.option("--boltz-override", is_flag=True,
+                 help="Rerun Boltz-2 scoring even if results exist")
+@optgroup.option("--ligand-prefix", default=None,
+                 help="Prefix for ligand names (fallback when SMILES file has no name column)")
 def run_cmd(
     input_path,
-    sequence, sequence_file, representative_smiles, reference_ligand,
-    work_dir, receptor_pdb,
-    grid_center, grid_size, ligand_chain_id,
-    output_dir,
-    docking_engine, num_workers, vina_cpu, batch_size, skip_docking, regenerate_conformer,
+    sequence, sequence_file, yaml, work_dir,
+    reference_ligand, receptor_pdb,
+    docking_engine, grid_center, grid_size, ligand_chain_id,
+    num_workers, vina_cpu, skip_docking, regenerate_conformer,
     use_msa_server, msa_server_url, msa_server_username, msa_server_password,
     msa_pairing_strategy, recycling_steps, sampling_steps, diffusion_samples,
     step_scale, max_parallel_samples, subsample_msa, num_subsampled_msa,
     use_potentials, max_msa_seqs, no_kernels, affinity_mw_correction,
-    seed, keep_intermediate_files, float32_matmul_precision,
+    output_dir, batch_size, seed, keep_intermediate_files, float32_matmul_precision,
     vina_override, boltz_override, ligand_prefix,
 ):
     """
@@ -139,11 +152,14 @@ def run_cmd(
 
     INPUT: Ligand file (.smi, .sdf) or directory containing ligand files.
 
-    Mode A (full-auto): provide --sequence or --sequence-file
-      → Boltz-2 structure prediction → docking → Boltz-2 affinity scoring
+    \b
+    Structure prediction:
+      boltzina run ligands.smi --sequence-file protein.fasta --output-dir ./results
+      boltzina run ligands.smi --yaml input.yaml --output-dir ./results
 
-    Mode B (existing Boltz results): provide --work-dir
-      → reuse existing Boltz-2 prediction → docking → scoring
+    \b
+    From precomputed Boltz-2 results:
+      boltzina run ligands.smi --work-dir ./boltz_results --output-dir ./results
     """
     from boltzina.runner import BoltzinaRunner, RunnerConfig
 
@@ -160,17 +176,35 @@ def run_cmd(
                 f"--grid-center must be 'x,y,z' (e.g. '7.0,-4.9,7.5'), got: {grid_center}"
             )
 
-    # Mode validation
-    if sequence is None and sequence_file is None and work_dir is None:
-        raise click.UsageError(
-            "Either --sequence/--sequence-file (Mode A) or --work-dir (Mode B) is required.\n"
-            "Run 'boltzina run --help' for usage."
-        )
+    # Exclusivity checks for --yaml and --work-dir
+    if yaml is not None:
+        if reference_ligand is not None:
+            raise click.UsageError(
+                "--yaml already contains the reference ligand. "
+                "Do not combine with --reference-ligand."
+            )
+        if ligand_chain_id != "B":
+            raise click.UsageError(
+                "--ligand-chain-id is derived automatically from --yaml "
+                "(properties.affinity.binder). Do not specify it explicitly."
+            )
 
+    if work_dir is not None:
+        if reference_ligand is not None:
+            raise click.UsageError(
+                "--reference-ligand is only valid for structure prediction "
+                "(--sequence / --sequence-file / --yaml), not for --work-dir."
+            )
+
+    # Echo pipeline description
     click.echo(f"Boltzina v{__version__}")
-    mode = "A (full-auto)" if (sequence or sequence_file) else "B (existing Boltz results)"
-    click.echo(f"Mode: {mode}")
-    click.echo(f"Input: {input_path}")
+    if yaml is not None:
+        click.echo("Docking with Boltz-2 structure prediction (from YAML)")
+    elif sequence is not None or sequence_file is not None:
+        click.echo("Docking with Boltz-2 structure prediction (from sequence)")
+    else:
+        click.echo("Docking from precomputed Boltz-2 results")
+    click.echo(f"Input:  {input_path}")
     click.echo(f"Output: {output_dir}")
 
     cfg = RunnerConfig(
@@ -178,10 +212,10 @@ def run_cmd(
         output_dir=Path(output_dir),
         sequence=sequence,
         sequence_file=Path(sequence_file) if sequence_file else None,
-        representative_smiles=representative_smiles,
-        reference_ligand=Path(reference_ligand) if reference_ligand else None,
+        yaml_input=Path(yaml) if yaml else None,
         work_dir=Path(work_dir) if work_dir else None,
         receptor_pdb=Path(receptor_pdb) if receptor_pdb else None,
+        reference_ligand=reference_ligand,
         grid_center=grid_center_tuple,
         grid_size=grid_size,
         ligand_chain_id=ligand_chain_id,
@@ -324,7 +358,7 @@ def setup_cmd(
     Tools:
       - AutoDock Vina (auto-downloaded binary)
       - MAXIT (source build)
-      - Uni-Dock2 (pixi-based, requires manual install then --register-unidock2)
+      - Uni-Dock2 (requires manual build; register with --register-unidock2)
       - Boltz-2 models (downloaded from HuggingFace)
     """
     from boltzina.config import (
@@ -460,5 +494,3 @@ def _download_boltz_models():
     download_boltz1(cache)
     download_boltz2(cache)
     click.echo("Boltz-2 models downloaded.")
-
-

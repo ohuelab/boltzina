@@ -1,21 +1,23 @@
 """
 BoltzinaRunner — end-to-end orchestrator for `boltzina run`.
 
-Supports two modes:
-  Mode A (full-auto): --sequence provided
-    1. Generate Boltz-2 YAML from sequence + representative SMILES
-    2. Run Boltz-2 structure prediction (or reuse existing)
-    3. Extract receptor PDB from Boltz-2 output
-    4. Determine grid center from predicted ligand position
-    5. Prepare ligands from SMILES/SDF input
-    6. Run Boltzina docking + scoring
-    7. Save results CSV
+Two pipelines:
 
-  Mode B (existing Boltz results): --work-dir provided
+  Structure prediction pipeline (--sequence / --sequence-file / --yaml):
+    1. Resolve protein sequences (single/multi-chain) or use pre-written YAML
+    2. Determine reference SMILES for Boltz-2 complex prediction
+    3. Run Boltz-2 structure prediction (or reuse existing)
+    4. Extract receptor PDB from Boltz-2 output
+    5. Determine grid center from predicted ligand position
+    6. Prepare ligands from SMILES/SDF input
+    7. Run docking + scoring
+    8. Save results CSV
+
+  Rescore pipeline (--work-dir):
     1. Extract receptor PDB from existing Boltz-2 output (or use --receptor-pdb)
     2. Determine grid center from predicted ligand position (or --grid-center)
-    3. Prepare ligands from SMILES/SDF/PDB input
-    4. Run Boltzina docking + scoring
+    3. Prepare ligands from SMILES/SDF input
+    4. Run docking + scoring
     5. Save results CSV
 """
 
@@ -39,21 +41,24 @@ class RunnerConfig:
     input_path: Path  # Ligand file (.smi, .sdf) or directory
     output_dir: Path
 
-    # --- Mode A: full-auto ---
-    sequence: Optional[str] = None
-    sequence_file: Optional[Path] = None
-    representative_smiles: Optional[str] = None  # for grid auto in Mode A
+    # --- Protein input: provide exactly one of these ---
+    sequence: Optional[str] = None          # single sequence or colon-separated multi-chain
+    sequence_file: Optional[Path] = None    # FASTA file (single or multi-chain)
+    yaml_input: Optional[Path] = None       # boltz-compatible YAML (overrides sequence)
+    work_dir: Optional[Path] = None         # existing Boltz-2 output directory (rescore)
+    receptor_pdb: Optional[Path] = None     # receptor PDB override (rescore only)
 
-    # --- Mode B: existing Boltz results ---
-    work_dir: Optional[Path] = None
-    receptor_pdb: Optional[Path] = None  # override auto-extraction
+    # --- Reference ligand (structure prediction only, non-YAML mode) ---
+    # SMILES string or path to SDF file. If omitted, the first ligand in INPUT is used.
+    # Used for: Boltz-2 complex prediction + grid center determination.
+    reference_ligand: Optional[str] = None
 
     # --- Grid ---
-    reference_ligand: Optional[Path] = None  # Mode A: explicit reference ligand
     grid_center: Optional[Tuple[float, float, float]] = None  # explicit override
     grid_size: float = 20.0
 
-    # --- Ligand chain for grid auto (Mode B) ---
+    # --- Ligand chain ID (YAML / rescore modes) ---
+    # In non-YAML structure prediction mode, this is derived automatically.
     ligand_chain_id: str = "B"
 
     # --- Docking ---
@@ -64,7 +69,7 @@ class RunnerConfig:
     skip_docking: bool = False
     regenerate_conformer: bool = False
 
-    # --- Boltz-2 prediction params (Mode A) ---
+    # --- Boltz-2 prediction params (structure prediction only) ---
     use_msa_server: bool = False
     msa_server_url: str = "https://api.colabfold.com"
     msa_pairing_strategy: str = "greedy"
@@ -108,104 +113,127 @@ class BoltzinaRunner:
         self._work_dir: Optional[Path] = None
         self._receptor_pdb: Optional[Path] = None
         self._fname: Optional[str] = None
+        self._ligand_chain_id: Optional[str] = None  # resolved from YAML or auto-assigned
 
     def run(self) -> pd.DataFrame:
-        """
-        Execute the full pipeline and return results DataFrame.
-        """
+        """Execute the full pipeline and return results DataFrame."""
         cfg = self.cfg
 
         # Validate mode
-        if cfg.sequence is None and cfg.sequence_file is None and cfg.work_dir is None:
+        has_predict_input = (
+            cfg.sequence is not None
+            or cfg.sequence_file is not None
+            or cfg.yaml_input is not None
+        )
+        if not has_predict_input and cfg.work_dir is None:
             raise ValueError(
-                "Either --sequence/--sequence-file (Mode A) or --work-dir (Mode B) is required."
+                "Protein input required. Provide one of:\n"
+                "  --sequence / --sequence-file  (structure prediction from sequence)\n"
+                "  --yaml                        (structure prediction from YAML)\n"
+                "  --work-dir                    (rescore from precomputed Boltz-2 results)"
             )
 
-        # Resolve protein sequence for Mode A
-        sequence = self._resolve_sequence()
-
-        if sequence is not None:
-            self._run_mode_a(sequence)
+        if cfg.yaml_input is not None:
+            self._run_predict_yaml()
+        elif has_predict_input:
+            sequences = self._resolve_sequences()
+            self._run_predict(sequences)
         else:
-            self._run_mode_b()
+            self._run_rescore()
 
         # Prepare ligands
         pdb_paths, pkl_path = self._prepare_ligands()
 
         # Run Boltzina engine
         results = self._run_boltzina_engine(pdb_paths, pkl_path)
-
         return results
 
-    def _resolve_sequence(self) -> Optional[str]:
+    # ------------------------------------------------------------------
+    # Sequence resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_sequences(self) -> list[str]:
+        """
+        Resolve protein sequences from --sequence or --sequence-file.
+
+        Handles:
+          - Single sequence string: "MENFQKV..."
+          - Colon-separated multi-chain: "SEQ1:SEQ2"
+          - FASTA file (single or multi-chain entries)
+        """
         cfg = self.cfg
         if cfg.sequence is not None:
-            return cfg.sequence.strip()
-        if cfg.sequence_file is not None:
-            text = cfg.sequence_file.read_text().strip()
-            # Handle FASTA format
-            lines = [l for l in text.splitlines() if not l.startswith(">")]
-            return "".join(lines).upper()
-        return None
+            parts = cfg.sequence.strip().split(":")
+            return [p.strip() for p in parts if p.strip()]
 
-    def _run_mode_a(self, sequence: str) -> None:
-        """Mode A: run Boltz-2 from scratch."""
+        if cfg.sequence_file is not None:
+            return _parse_fasta(cfg.sequence_file)
+
+        raise RuntimeError("_resolve_sequences() called without sequence or sequence_file")
+
+    # ------------------------------------------------------------------
+    # Pipeline branches
+    # ------------------------------------------------------------------
+
+    def _run_predict(self, sequences: list[str]) -> None:
+        """Structure prediction pipeline (from sequences)."""
         from boltzina.boltz_setup import setup_boltz_for_run
 
         cfg = self.cfg
-
-        # Determine representative SMILES for Boltz-2 prediction
-        representative_smiles = cfg.representative_smiles
+        representative_smiles = self._get_reference_smiles()
         if representative_smiles is None:
             representative_smiles = self._get_first_smiles()
-            print(f"Using first ligand as representative SMILES for Boltz-2 prediction: {representative_smiles[:60]}...")
+            print(
+                f"Using first ligand as reference SMILES for Boltz-2 prediction: "
+                f"{representative_smiles[:60]}..."
+            )
+        else:
+            print(f"Reference ligand SMILES: {representative_smiles[:60]}...")
 
         fname = cfg.output_dir.stem or "boltzina_input"
         work_base_dir = cfg.output_dir / "boltz_work"
 
-        boltz_kwargs = dict(
-            use_msa_server=cfg.use_msa_server,
-            msa_server_url=cfg.msa_server_url,
-            msa_pairing_strategy=cfg.msa_pairing_strategy,
-            msa_server_username=cfg.msa_server_username,
-            msa_server_password=cfg.msa_server_password,
-            api_key_header=cfg.api_key_header,
-            api_key_value=cfg.api_key_value,
-            recycling_steps=cfg.recycling_steps,
-            sampling_steps=cfg.sampling_steps,
-            diffusion_samples=cfg.diffusion_samples,
-            step_scale=cfg.step_scale,
-            max_parallel_samples=cfg.max_parallel_samples,
-            use_potentials=cfg.use_potentials,
-            max_msa_seqs=cfg.max_msa_seqs,
-            subsample_msa=cfg.subsample_msa,
-            num_subsampled_msa=cfg.num_subsampled_msa,
-            no_kernels=cfg.no_kernels,
-            affinity_mw_correction=cfg.affinity_mw_correction,
-            seed=cfg.seed,
-        )
-
-        work_dir, receptor_pdb = setup_boltz_for_run(
-            sequence=sequence,
+        work_dir, receptor_pdb, ligand_chain_id = setup_boltz_for_run(
+            sequences=sequences,
             representative_smiles=representative_smiles,
             work_base_dir=work_base_dir,
             fname=fname,
-            ligand_chain_id=cfg.ligand_chain_id,
-            boltz_kwargs=boltz_kwargs,
+            boltz_kwargs=self._boltz_kwargs(),
         )
         self._work_dir = work_dir
         self._receptor_pdb = receptor_pdb
         self._fname = fname
+        self._ligand_chain_id = ligand_chain_id
 
-    def _run_mode_b(self) -> None:
-        """Mode B: use existing Boltz-2 results."""
+    def _run_predict_yaml(self) -> None:
+        """Structure prediction pipeline (from a pre-written boltz YAML file)."""
+        from boltzina.boltz_setup import setup_boltz_for_run_from_yaml
+
+        cfg = self.cfg
+        fname = cfg.output_dir.stem or "boltzina_input"
+        work_base_dir = cfg.output_dir / "boltz_work"
+
+        work_dir, receptor_pdb, ligand_chain_id = setup_boltz_for_run_from_yaml(
+            yaml_path=cfg.yaml_input,
+            work_base_dir=work_base_dir,
+            fname=fname,
+            boltz_kwargs=self._boltz_kwargs(),
+        )
+        self._work_dir = work_dir
+        self._receptor_pdb = receptor_pdb
+        self._fname = fname
+        self._ligand_chain_id = ligand_chain_id
+
+    def _run_rescore(self) -> None:
+        """Rescore pipeline: use existing Boltz-2 results."""
         from boltzina.boltz_setup import extract_receptor_pdb
+        import json
 
         cfg = self.cfg
         self._work_dir = cfg.work_dir
+        self._ligand_chain_id = cfg.ligand_chain_id
 
         # Determine fname from manifest
-        import json
         manifest_path = cfg.work_dir / "processed" / "manifest.json"
         if not manifest_path.exists():
             raise RuntimeError(
@@ -222,19 +250,48 @@ class BoltzinaRunner:
         else:
             self._receptor_pdb = extract_receptor_pdb(cfg.work_dir, self._fname)
 
-    def _prepare_ligands(self) -> Tuple[list, Path]:
-        """Prepare ligands and return (pdb_paths, pkl_path)."""
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_reference_smiles(self) -> Optional[str]:
+        """
+        Return the reference SMILES from --reference-ligand.
+
+        Accepts either a SMILES string or a path to an SDF file.
+        Returns None if --reference-ligand was not specified.
+        """
         cfg = self.cfg
-        ligand_prep_dir = cfg.output_dir / "ligands_prepared"
-        return prepare_ligands_from_file(
-            input_path=cfg.input_path,
-            output_dir=ligand_prep_dir,
-            ligand_prefix=cfg.ligand_prefix,
-            regenerate_conformer=cfg.regenerate_conformer,
-        )
+        if cfg.reference_ligand is None:
+            return None
+
+        ref = cfg.reference_ligand.strip()
+        ref_path = Path(ref)
+        if ref_path.exists():
+            # Treat as SDF/PDB file
+            from rdkit import Chem
+            suffix = ref_path.suffix.lower()
+            if suffix in (".sdf", ".mol"):
+                supplier = Chem.SDMolSupplier(str(ref_path))
+                for mol in supplier:
+                    if mol is not None:
+                        return Chem.MolToSmiles(mol)
+                raise ValueError(f"No molecules found in reference ligand file: {ref_path}")
+            elif suffix == ".pdb":
+                mol = Chem.MolFromPDBFile(str(ref_path), removeHs=False)
+                if mol is not None:
+                    return Chem.MolToSmiles(mol)
+                raise ValueError(f"Could not read reference ligand PDB: {ref_path}")
+            else:
+                raise ValueError(
+                    f"Unsupported reference ligand format: {suffix}. "
+                    "Supported: SMILES string, .sdf, .pdb"
+                )
+        # Treat as SMILES string
+        return ref
 
     def _get_first_smiles(self) -> str:
-        """Extract the first SMILES from the input file."""
+        """Extract the first SMILES from the ligand input file."""
         cfg = self.cfg
         input_path = cfg.input_path
         suffix = input_path.suffix.lower()
@@ -257,6 +314,48 @@ class BoltzinaRunner:
 
         raise ValueError(f"Cannot extract SMILES from {input_path}")
 
+    def _boltz_kwargs(self) -> dict:
+        """Collect Boltz-2 prediction kwargs from config."""
+        cfg = self.cfg
+        return dict(
+            use_msa_server=cfg.use_msa_server,
+            msa_server_url=cfg.msa_server_url,
+            msa_pairing_strategy=cfg.msa_pairing_strategy,
+            msa_server_username=cfg.msa_server_username,
+            msa_server_password=cfg.msa_server_password,
+            api_key_header=cfg.api_key_header,
+            api_key_value=cfg.api_key_value,
+            recycling_steps=cfg.recycling_steps,
+            sampling_steps=cfg.sampling_steps,
+            diffusion_samples=cfg.diffusion_samples,
+            step_scale=cfg.step_scale,
+            max_parallel_samples=cfg.max_parallel_samples,
+            use_potentials=cfg.use_potentials,
+            max_msa_seqs=cfg.max_msa_seqs,
+            subsample_msa=cfg.subsample_msa,
+            num_subsampled_msa=cfg.num_subsampled_msa,
+            no_kernels=cfg.no_kernels,
+            affinity_mw_correction=cfg.affinity_mw_correction,
+            seed=cfg.seed,
+        )
+
+    def _prepare_ligands(self) -> Tuple[list, Path]:
+        """Prepare ligands and return (pdb_paths, pkl_path)."""
+        cfg = self.cfg
+        ligand_prep_dir = cfg.output_dir / "ligands_prepared"
+        pdb_paths, pkl_path = prepare_ligands_from_file(
+            input_path=cfg.input_path,
+            output_dir=ligand_prep_dir,
+            ligand_prefix=cfg.ligand_prefix,
+            regenerate_conformer=cfg.regenerate_conformer,
+        )
+        if not pdb_paths:
+            raise ValueError(
+                f"No ligands were prepared from {cfg.input_path}. "
+                "Check that the input file contains at least one valid SMILES or molecule."
+            )
+        return pdb_paths, pkl_path
+
     def _run_boltzina_engine(self, pdb_paths: list, pkl_path: Path) -> pd.DataFrame:
         """Run the Boltzina docking+scoring engine."""
         from boltzina.engine import Boltzina
@@ -264,13 +363,15 @@ class BoltzinaRunner:
         cfg = self.cfg
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Resolved ligand chain ID (from YAML, auto-assigned, or explicit)
+        ligand_chain_id = self._ligand_chain_id or cfg.ligand_chain_id
+
         # Determine grid center and write Vina config
         vina_config_path = cfg.output_dir / "vina_config.txt"
         center = determine_grid_center(
             work_dir=self._work_dir,
             fname=self._fname,
-            ligand_chain_id=cfg.ligand_chain_id,
-            reference_ligand=cfg.reference_ligand,
+            ligand_chain_id=ligand_chain_id,
             grid_center=cfg.grid_center,
         )
         write_vina_config(
@@ -297,7 +398,7 @@ class BoltzinaRunner:
             clean_intermediate_files=not cfg.keep_intermediate_files,
             run_trunk_and_structure=cfg.run_trunk_and_structure,
             float32_matmul_precision=cfg.float32_matmul_precision,
-            ligand_chain_id=cfg.ligand_chain_id,
+            ligand_chain_id=ligand_chain_id,
             prepared_mols_file=str(pkl_path),
             docking_engine=cfg.docking_engine,
             unidock2_config=cfg.unidock2_config,
@@ -310,3 +411,40 @@ class BoltzinaRunner:
         df = boltzina.get_results_dataframe()
         print(df.to_string(index=False))
         return df
+
+
+def _parse_fasta(fasta_path: Path) -> list[str]:
+    """
+    Parse a FASTA file and return a list of sequences (one per entry).
+
+    Supports standard multi-entry FASTA:
+        >entry1
+        MENFQKV...
+        >entry2
+        AKLSILP...
+
+    Returns a list of sequences in the order they appear.
+    Raises ValueError if no sequences are found.
+    """
+    sequences: list[str] = []
+    current: list[str] = []
+
+    with open(fasta_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if current:
+                    sequences.append("".join(current).upper())
+                    current = []
+            else:
+                current.append(line)
+
+    if current:
+        sequences.append("".join(current).upper())
+
+    if not sequences:
+        raise ValueError(f"No sequences found in FASTA file: {fasta_path}")
+
+    return sequences

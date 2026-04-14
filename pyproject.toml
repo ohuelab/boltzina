@@ -28,6 +28,7 @@ dependencies = [
     "click>=8.0",
     "tomli>=2.0; python_version < '3.11'",
     "tomli-w>=1.0",
+    "click-option-group>=0.5.9",
 ]
 
 [project.urls]

@@ -264,3 +264,11 @@ class TestPrepareLigandsFromFile:
         out_dir = tmp_path / "out"
         with pytest.raises(ValueError, match="No supported ligand files"):
             prepare_ligands_from_file(input_path=ligand_dir, output_dir=out_dir)
+
+    def test_empty_smiles_file_returns_empty_list(self, tmp_path):
+        """SMILES file with only comments/blank lines returns empty pdb_paths."""
+        smi_path = tmp_path / "empty.smi"
+        smi_path.write_text("# just a comment\n\n")
+        out_dir = tmp_path / "out"
+        pdb_paths, pkl_path = prepare_ligands_from_file(input_path=smi_path, output_dir=out_dir)
+        assert pdb_paths == []

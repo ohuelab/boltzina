@@ -1,17 +1,18 @@
 """
-Boltz-2 prerequisite automation for Boltzina.
+Boltz-2 setup utilities for Boltzina.
 
-Handles:
-  - Generating a Boltz-2 YAML input file from a protein sequence + representative SMILES
-  - Running Boltz-2 structure prediction via the Python API (boltz.main.predict)
-  - Returning the paths that Boltzina needs (work_dir, receptor_pdb, fname)
-
-This module is used by BoltzinaRunner for Mode A (full-auto) operation.
+Provides:
+  - generate_boltz_yaml(): Create Boltz-2 YAML from sequences + reference SMILES
+  - run_boltz_predict(): Call boltz.main.predict() Python API
+  - extract_receptor_pdb(): Extract protein chain from Boltz-2 CIF output
+  - setup_boltz_for_run(): Orchestrate prediction (generate YAML → predict → extract PDB)
+  - setup_boltz_for_run_from_yaml(): Same but using a pre-written YAML file
 """
 
 from __future__ import annotations
 
 import re
+import string
 from pathlib import Path
 from typing import Optional
 
@@ -21,61 +22,67 @@ from boltzina.config import get_boltz_cache
 
 
 def generate_boltz_yaml(
-    sequence: str,
+    sequences: list[str],
     representative_smiles: str,
     output_path: Path,
-    protein_chain_id: str = "A",
-    ligand_chain_id: str = "B",
-) -> Path:
+) -> tuple[Path, str]:
     """
-    Generate a Boltz-2 YAML input file for structure + affinity prediction.
+    Generate a Boltz-2 YAML input file from one or more protein sequences.
 
-    The generated YAML specifies:
-      - A protein chain with the given sequence
-      - A ligand chain with the representative SMILES
-      - An affinity property targeting the ligand chain
+    Chain IDs are assigned automatically: A, B, C, ... for proteins in order,
+    then the next available letter for the ligand.
 
     Args:
-        sequence: Amino acid sequence (single-letter codes)
-        representative_smiles: SMILES for the reference ligand used to determine
-            the binding site (used for grid center determination after prediction)
-        output_path: Path to write the YAML file
-        protein_chain_id: Chain ID for the protein (default: "A")
-        ligand_chain_id: Chain ID for the ligand (default: "B")
+        sequences: List of protein amino acid sequences (single-letter codes).
+                   One entry = one chain. Multiple entries = multi-chain complex.
+        representative_smiles: SMILES for the reference ligand (defines binding
+                               site; used for grid center determination after
+                               structure prediction).
+        output_path: Path to write the generated YAML file.
 
     Returns:
-        Path to the written YAML file
+        (yaml_path, ligand_chain_id): Path to the written YAML and the ligand's
+        chain ID (the letter after the last protein chain).
+
+    Raises:
+        ValueError: If sequences is empty, too many sequences (>25), or any
+                    sequence contains non-standard amino acid characters.
     """
-    # Validate sequence
-    sequence = sequence.strip().upper()
-    if not re.match(r"^[ACDEFGHIKLMNPQRSTVWY]+$", sequence):
+    if not sequences:
+        raise ValueError("At least one protein sequence is required.")
+
+    n = len(sequences)
+    letters = list(string.ascii_uppercase)
+    if n >= len(letters):
         raise ValueError(
-            "Protein sequence contains non-standard amino acid characters. "
-            "Only single-letter codes (ACDEFGHIKLMNPQRSTVWY) are supported."
+            f"Too many protein chains ({n}). Maximum supported is {len(letters) - 1}."
         )
+
+    protein_chain_ids = letters[:n]
+    ligand_chain_id = letters[n]
+
+    # Validate and normalise each sequence
+    clean_seqs = []
+    for i, seq in enumerate(sequences):
+        seq = seq.strip().upper()
+        if not re.match(r"^[ACDEFGHIKLMNPQRSTVWY]+$", seq):
+            raise ValueError(
+                f"Protein sequence {i + 1} contains non-standard amino acid characters. "
+                "Only single-letter codes (ACDEFGHIKLMNPQRSTVWY) are supported."
+            )
+        clean_seqs.append(seq)
 
     config = {
         "version": 1,
         "sequences": [
-            {
-                "protein": {
-                    "id": protein_chain_id,
-                    "sequence": sequence,
-                }
-            },
-            {
-                "ligand": {
-                    "id": ligand_chain_id,
-                    "smiles": representative_smiles,
-                }
-            },
+            {"protein": {"id": chain_id, "sequence": seq}}
+            for chain_id, seq in zip(protein_chain_ids, clean_seqs)
+        ]
+        + [
+            {"ligand": {"id": ligand_chain_id, "smiles": representative_smiles}}
         ],
         "properties": [
-            {
-                "affinity": {
-                    "binder": ligand_chain_id,
-                }
-            }
+            {"affinity": {"binder": ligand_chain_id}}
         ],
     }
 
@@ -84,7 +91,7 @@ def generate_boltz_yaml(
     with open(output_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-    return output_path
+    return output_path, ligand_chain_id
 
 
 def run_boltz_predict(
@@ -176,125 +183,170 @@ def run_boltz_predict(
 
 def extract_receptor_pdb(work_dir: Path, fname: str) -> Path:
     """
-    Extract the receptor (protein-only) PDB from a Boltz-2 prediction.
+    Extract a protein-only PDB from a Boltz-2 CIF prediction output.
 
-    Boltz-2 outputs the full complex as CIF. Boltzina's pipeline needs a
-    protein-only PDB file as receptor. This function:
-      1. Finds the predicted structure CIF/PDB
-      2. Extracts only protein chains using pdb-tools (pdb_selchain)
-      3. Returns the path to the extracted receptor PDB
+    Looks for {fname}_model_0.cif in work_dir/predictions/{fname}/,
+    converts it to PDB, and returns a protein-only PDB.
 
-    Args:
-        work_dir: Boltz-2 output directory
-        fname: Base filename (stem of the YAML input)
-
-    Returns:
-        Path to the receptor PDB file
+    Falls back to a pre-existing _protein.pdb if available.
     """
-    import subprocess
+    from pathlib import Path as _Path
 
     pred_dir = work_dir / "predictions" / fname
-    receptor_pdb = pred_dir / f"{fname}_receptor.pdb"
-
-    if receptor_pdb.exists():
-        return receptor_pdb
-
-    # Find the predicted structure
     cif_path = pred_dir / f"{fname}_model_0.cif"
     pdb_path = pred_dir / f"{fname}_model_0.pdb"
+    protein_pdb = pred_dir / f"{fname}_model_0_protein.pdb"
 
+    # If protein PDB already extracted, return it
+    if protein_pdb.exists():
+        return protein_pdb
+
+    # Try CIF → PDB via maxit or pdb_fromcif
     if cif_path.exists():
-        # Convert CIF to PDB using pdb-tools
-        raw_pdb = pred_dir / f"{fname}_model_0_raw.pdb"
         try:
-            result = subprocess.run(
-                ["python", "-m", "pdbtools.pdb_fromcif", str(cif_path)],
-                capture_output=True, text=True, check=False
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                # Try maxit conversion fallback
-                _extract_protein_from_cif_rdkit(cif_path, receptor_pdb)
-                return receptor_pdb
-            raw_pdb.write_text(result.stdout)
-            pdb_path = raw_pdb
-        except FileNotFoundError:
-            _extract_protein_from_cif_rdkit(cif_path, receptor_pdb)
-            return receptor_pdb
+            _convert_cif_to_protein_pdb(cif_path, protein_pdb)
+            if protein_pdb.exists():
+                return protein_pdb
+        except Exception as e:
+            print(f"Warning: CIF→PDB conversion failed: {e}. Trying fallback.")
 
-    if not pdb_path.exists():
-        raise RuntimeError(
-            f"No predicted structure found in {pred_dir}. "
-            f"Expected {fname}_model_0.cif or {fname}_model_0.pdb"
-        )
+    # Fallback: use existing .pdb directly (may include ligand)
+    if pdb_path.exists():
+        return _extract_protein_atoms(pdb_path, protein_pdb)
 
-    # Extract protein chain(s) only (chain A by default, excluding ligand chain)
-    _extract_protein_lines(pdb_path, receptor_pdb)
-    return receptor_pdb
+    raise RuntimeError(
+        f"No predicted structure found in {pred_dir}. "
+        "Expected {fname}_model_0.cif or {fname}_model_0.pdb."
+    )
 
 
-def _extract_protein_lines(input_pdb: Path, output_pdb: Path) -> None:
-    """
-    Write a PDB file containing only ATOM records (protein/nucleic acid),
-    excluding HETATM records (ligands, waters).
-    """
+def _convert_cif_to_protein_pdb(cif_path: Path, output_pdb: Path) -> None:
+    """Convert a CIF file to PDB using pdb_fromcif (pdb-tools), then filter protein atoms."""
+    import subprocess
+
+    output_pdb.parent.mkdir(parents=True, exist_ok=True)
+    tmp_pdb = output_pdb.with_suffix(".tmp.pdb")
+
+    # Try pdb_fromcif (pdb-tools)
+    result = subprocess.run(
+        ["pdb_fromcif", str(cif_path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"pdb_fromcif failed: {result.stderr}")
+
+    tmp_pdb.write_text(result.stdout)
+    _extract_protein_atoms(tmp_pdb, output_pdb)
+    tmp_pdb.unlink(missing_ok=True)
+
+
+def _extract_protein_atoms(input_pdb: Path, output_pdb: Path) -> Path:
+    """Write a new PDB containing only ATOM records (protein atoms)."""
+    output_pdb.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     with open(input_pdb) as f:
         for line in f:
             if line.startswith("ATOM") or line.startswith("TER") or line.startswith("END"):
                 lines.append(line)
-    if not lines:
-        raise RuntimeError(
-            f"No ATOM records found in {input_pdb}. "
-            "The predicted structure may be empty or in an unexpected format."
-        )
-    with open(output_pdb, "w") as f:
-        f.writelines(lines)
-        if not lines[-1].startswith("END"):
-            f.write("END\n")
+    output_pdb.write_text("".join(lines))
+    return output_pdb
 
 
-def _extract_protein_from_cif_rdkit(cif_path: Path, output_pdb: Path) -> None:
+def parse_yaml_ligand_chain(yaml_path: Path) -> tuple[str, str]:
     """
-    Fallback: use Biopython-style CIF parsing to extract protein atoms.
-    This is a simple text-based approach for CIF files.
+    Parse a Boltz-2 YAML and extract the reference ligand SMILES and chain ID.
+
+    Validates that the YAML has:
+      - At least one protein entry
+      - Exactly one ligand entry that is the affinity binder
+      - A properties.affinity section
+
+    Returns:
+        (smiles, ligand_chain_id)
+
+    Raises:
+        ValueError: If the YAML format is invalid.
     """
-    protein_lines = []
-    try:
-        with open(cif_path) as f:
-            content = f.read()
-        # Simple heuristic: write a notice that this requires maxit
-        raise RuntimeError(
-            f"Cannot convert CIF {cif_path} to PDB without pdb-tools or maxit. "
-            "Install pdb-tools (already a dependency) and ensure it is on PATH."
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+
+    sequences = data.get("sequences", [])
+    properties = data.get("properties", [])
+
+    # Find affinity binder chain
+    affinity_binder = None
+    for prop in properties:
+        if "affinity" in prop:
+            affinity_binder = prop["affinity"].get("binder")
+            break
+
+    if affinity_binder is None:
+        raise ValueError(
+            f"YAML {yaml_path.name} must have a 'properties.affinity.binder' entry. "
+            "This specifies which ligand chain to use for affinity prediction and grid center."
         )
-    except RuntimeError:
-        raise
+
+    # Find protein entries and ligand entry
+    protein_count = 0
+    ligand_smiles = None
+    ligand_chain_id = None
+
+    for entry in sequences:
+        if "protein" in entry:
+            protein_count += 1
+        elif "ligand" in entry:
+            lig = entry["ligand"]
+            chain_id = lig.get("id")
+            # Normalise: id may be a string or list
+            if isinstance(chain_id, list):
+                chain_id = chain_id[0]
+            if chain_id == affinity_binder:
+                smiles = lig.get("smiles")
+                if smiles is None:
+                    raise ValueError(
+                        f"Ligand chain '{affinity_binder}' in YAML must specify 'smiles' "
+                        "(CCD-only ligands are not supported for affinity prediction)."
+                    )
+                ligand_smiles = smiles
+                ligand_chain_id = chain_id
+
+    if protein_count == 0:
+        raise ValueError(
+            f"YAML {yaml_path.name} must contain at least one 'protein' entry."
+        )
+
+    if ligand_smiles is None:
+        raise ValueError(
+            f"YAML {yaml_path.name}: affinity binder chain '{affinity_binder}' not found "
+            "among ligand entries, or its id does not match."
+        )
+
+    return ligand_smiles, ligand_chain_id
 
 
 def setup_boltz_for_run(
-    sequence: str,
+    sequences: list[str],
     representative_smiles: str,
     work_base_dir: Path,
     fname: str = "boltzina_input",
-    ligand_chain_id: str = "B",
     boltz_kwargs: Optional[dict] = None,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, str]:
     """
-    Full setup pipeline for Mode A: generate YAML, run Boltz-2, extract receptor.
+    Full setup pipeline for structure prediction mode (from sequences).
 
-    If work_dir already exists and contains a valid manifest.json, skip prediction
-    and reuse the existing results.
+    Generates a Boltz-2 YAML from the given protein sequences and reference SMILES,
+    runs Boltz-2 prediction (or reuses existing results), and extracts the receptor PDB.
 
     Args:
-        sequence: Protein amino acid sequence
-        representative_smiles: SMILES for grid center determination
-        work_base_dir: Parent directory for Boltz-2 output
-        fname: Base name for input/output files
-        ligand_chain_id: Ligand chain ID in the YAML
-        boltz_kwargs: Additional kwargs forwarded to run_boltz_predict()
+        sequences: List of protein amino acid sequences (one per chain).
+        representative_smiles: SMILES for the reference/binder ligand.
+        work_base_dir: Parent directory for Boltz-2 output.
+        fname: Base name for input/output files.
+        boltz_kwargs: Additional kwargs forwarded to run_boltz_predict().
 
     Returns:
-        (work_dir, receptor_pdb): Boltz-2 output dir and receptor PDB path
+        (work_dir, receptor_pdb, ligand_chain_id)
     """
     boltz_kwargs = boltz_kwargs or {}
     work_base_dir = Path(work_base_dir)
@@ -306,13 +358,15 @@ def setup_boltz_for_run(
     if manifest_path.exists():
         print(f"Reusing existing Boltz-2 results in {expected_work_dir}")
         work_dir = expected_work_dir
+        # Re-derive ligand_chain_id from number of sequences
+        import string as _string
+        ligand_chain_id = _string.ascii_uppercase[len(sequences)]
     else:
         yaml_path = work_base_dir / f"{fname}.yaml"
-        generate_boltz_yaml(
-            sequence=sequence,
+        _, ligand_chain_id = generate_boltz_yaml(
+            sequences=sequences,
             representative_smiles=representative_smiles,
             output_path=yaml_path,
-            ligand_chain_id=ligand_chain_id,
         )
         print(f"Generated Boltz-2 input YAML: {yaml_path}")
         print("Running Boltz-2 structure prediction...")
@@ -324,4 +378,60 @@ def setup_boltz_for_run(
 
     receptor_pdb = extract_receptor_pdb(work_dir, fname)
     print(f"Receptor PDB: {receptor_pdb}")
-    return work_dir, receptor_pdb
+    return work_dir, receptor_pdb, ligand_chain_id
+
+
+def setup_boltz_for_run_from_yaml(
+    yaml_path: Path,
+    work_base_dir: Path,
+    fname: str = "boltzina_input",
+    boltz_kwargs: Optional[dict] = None,
+) -> tuple[Path, Path, str]:
+    """
+    Full setup pipeline for structure prediction mode (from a pre-written YAML).
+
+    The YAML is passed directly to Boltz-2 (no generation step). The ligand
+    chain ID and reference SMILES are extracted from the YAML's
+    properties.affinity.binder and the corresponding ligand entry.
+
+    Args:
+        yaml_path: Path to a Boltz-2 compatible YAML file.
+        work_base_dir: Parent directory for Boltz-2 output.
+        fname: Base name (used for the output subdirectory).
+        boltz_kwargs: Additional kwargs forwarded to run_boltz_predict().
+
+    Returns:
+        (work_dir, receptor_pdb, ligand_chain_id)
+    """
+    import shutil
+
+    boltz_kwargs = boltz_kwargs or {}
+    work_base_dir = Path(work_base_dir)
+    work_base_dir.mkdir(parents=True, exist_ok=True)
+    yaml_path = Path(yaml_path)
+
+    # Validate and extract ligand chain info from YAML
+    _, ligand_chain_id = parse_yaml_ligand_chain(yaml_path)
+
+    expected_work_dir = work_base_dir / f"boltz_results_{fname}"
+    manifest_path = expected_work_dir / "processed" / "manifest.json"
+
+    if manifest_path.exists():
+        print(f"Reusing existing Boltz-2 results in {expected_work_dir}")
+        work_dir = expected_work_dir
+    else:
+        # Copy YAML into work_base_dir with fname as stem so boltz creates
+        # the expected boltz_results_{fname} output directory
+        dest_yaml = work_base_dir / f"{fname}.yaml"
+        if dest_yaml.resolve() != yaml_path.resolve():
+            shutil.copy2(yaml_path, dest_yaml)
+        print(f"Running Boltz-2 structure prediction (from YAML: {yaml_path.name})...")
+        work_dir = run_boltz_predict(
+            yaml_path=dest_yaml,
+            out_dir=work_base_dir,
+            **boltz_kwargs,
+        )
+
+    receptor_pdb = extract_receptor_pdb(work_dir, fname)
+    print(f"Receptor PDB: {receptor_pdb}")
+    return work_dir, receptor_pdb, ligand_chain_id

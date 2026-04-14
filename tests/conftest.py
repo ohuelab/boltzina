@@ -106,6 +106,85 @@ def simple_sdf_file(tmp_path) -> Path:
 
 
 @pytest.fixture
+def fasta_file(tmp_path) -> Path:
+    """Single-chain CDK2 FASTA."""
+    p = tmp_path / "cdk2.fasta"
+    p.write_text(
+        ">CDK2\n"
+        "MENFQKVEKIGEGTYGVVYKARNKLTGEVVALKKIRLDTETEGVPSTAIREISLLKELNHPNIVKLLDVIH\n"
+        "TENKLYLVFEFLHQDLKKFMDASALTGIPLPLIKSYLFQLLQGLAFCHSHRVLHRDLKPQNLLINTTCDLK\n"
+    )
+    return p
+
+
+@pytest.fixture
+def multichain_fasta_file(tmp_path) -> Path:
+    """Two-chain FASTA (CDK2 + short cyclin fragment)."""
+    p = tmp_path / "multichain.fasta"
+    p.write_text(
+        ">CDK2\n"
+        "MENFQKVEKIGEGTYGVVYK\n"
+        ">CyclinA_fragment\n"
+        "AKLSILPWGHC\n"
+    )
+    return p
+
+
+@pytest.fixture
+def boltz_yaml_file(tmp_path) -> Path:
+    """Valid boltz-compatible YAML with protein + ligand + affinity."""
+    p = tmp_path / "input.yaml"
+    p.write_text(
+        "version: 1\n"
+        "sequences:\n"
+        "  - protein:\n"
+        "      id: A\n"
+        "      sequence: MENFQKVEKIGEGTYGVVYK\n"
+        "  - ligand:\n"
+        "      id: B\n"
+        "      smiles: 'CCN(CC)c1nc(Nc2ccccc2)c2ncn(C(C)CO)c2n1'\n"
+        "properties:\n"
+        "  - affinity:\n"
+        "      binder: B\n"
+    )
+    return p
+
+
+@pytest.fixture
+def yaml_no_protein_file(tmp_path) -> Path:
+    """YAML missing protein entry — should fail validation."""
+    p = tmp_path / "no_protein.yaml"
+    p.write_text(
+        "version: 1\n"
+        "sequences:\n"
+        "  - ligand:\n"
+        "      id: B\n"
+        "      smiles: 'CCO'\n"
+        "properties:\n"
+        "  - affinity:\n"
+        "      binder: B\n"
+    )
+    return p
+
+
+@pytest.fixture
+def yaml_no_ligand_file(tmp_path) -> Path:
+    """YAML missing ligand entry — should fail validation."""
+    p = tmp_path / "no_ligand.yaml"
+    p.write_text(
+        "version: 1\n"
+        "sequences:\n"
+        "  - protein:\n"
+        "      id: A\n"
+        "      sequence: MENFQKV\n"
+        "properties:\n"
+        "  - affinity:\n"
+        "      binder: B\n"
+    )
+    return p
+
+
+@pytest.fixture
 def flat_sdf_file(tmp_path) -> Path:
     """Write an SDF file WITHOUT 3D coordinates (all z=0) and return its path."""
     from rdkit import Chem

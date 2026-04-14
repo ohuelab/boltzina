@@ -75,30 +75,16 @@ class TestDetermineGridCenter:
             work_dir=boltz_work_dir,
             fname="1ckp_cdk2",
             ligand_chain_id="B",
-            reference_ligand=None,
             grid_center=explicit,
         )
         np.testing.assert_array_almost_equal(center, explicit, decimal=3)
 
-    def test_reference_ligand_pdb(self, ligand_pdb_path, boltz_work_dir):
-        """Reference ligand file → center of mass."""
-        center = determine_grid_center(
-            work_dir=boltz_work_dir,
-            fname="1ckp_cdk2",
-            ligand_chain_id="B",
-            reference_ligand=ligand_pdb_path,
-            grid_center=None,
-        )
-        assert center is not None
-        assert len(center) == 3
-
     def test_work_dir_fallback(self, boltz_work_dir):
-        """Without explicit center or reference ligand, use work_dir CIF."""
+        """Without explicit center, use work_dir CIF."""
         center = determine_grid_center(
             work_dir=boltz_work_dir,
             fname="1ckp_cdk2",
             ligand_chain_id="B",
-            reference_ligand=None,
             grid_center=None,
         )
         assert center is not None
@@ -111,7 +97,6 @@ class TestDetermineGridCenter:
                 work_dir=tmp_path,
                 fname="nonexistent",
                 ligand_chain_id="B",
-                reference_ligand=None,
                 grid_center=None,
             )
 

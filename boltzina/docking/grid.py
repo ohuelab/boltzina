@@ -3,8 +3,7 @@ Automatic docking grid determination for Boltzina.
 
 Strategies (in priority order):
   1. Explicit --grid-center: use as-is
-  2. Reference ligand file (--reference-ligand): compute center of mass
-  3. Boltz-2 predicted ligand position (default auto): extract ligand chain
+  2. Boltz-2 predicted ligand position (default auto): extract ligand chain
      coords from predicted CIF/PDB in work_dir
 
 Writes a Vina-compatible config file with center_x/y/z and size_x/y/z.
@@ -207,16 +206,14 @@ def determine_grid_center(
     work_dir: Optional[Path] = None,
     fname: Optional[str] = None,
     ligand_chain_id: str = "B",
-    reference_ligand: Optional[Path] = None,
     grid_center: Optional[Tuple[float, float, float]] = None,
 ) -> np.ndarray:
     """
     Determine grid center using available information.
 
     Priority:
-      1. grid_center (explicit tuple)
-      2. reference_ligand file (COM via RDKit)
-      3. work_dir + fname: predicted ligand position from Boltz-2 output
+      1. grid_center (explicit tuple from --grid-center)
+      2. work_dir + fname: predicted ligand position from Boltz-2 output
 
     Returns:
         numpy array [x, y, z]
@@ -225,14 +222,6 @@ def determine_grid_center(
         center = np.array(grid_center, dtype=float)
         print(
             f"Using explicit grid center: ({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})"
-        )
-        return center
-
-    if reference_ligand is not None:
-        center = get_center_of_mass_from_file(str(reference_ligand))
-        print(
-            f"Grid center from reference ligand {reference_ligand.name}: "
-            f"({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})"
         )
         return center
 
@@ -245,6 +234,6 @@ def determine_grid_center(
         return center
 
     raise ValueError(
-        "Cannot determine grid center: provide --grid-center, --reference-ligand, "
-        "or --work-dir with a valid Boltz-2 prediction."
+        "Cannot determine grid center: provide --grid-center or "
+        "--work-dir with a valid Boltz-2 prediction."
     )
