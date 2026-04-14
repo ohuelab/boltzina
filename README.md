@@ -21,10 +21,12 @@ pip install .
 boltzina setup --all
 ```
 
-For Uni-Dock2 (GPU-accelerated docking):
+For Uni-Dock2 (GPU-accelerated docking, requires [pixi](https://pixi.sh) and CUDA 12):
 ```bash
-boltzina setup --install-unidock2   # shows installation guide
-boltzina setup --register-unidock2 /path/to/Uni-Dock2  # after install
+# Clone and build Uni-Dock2 manually, then register:
+git clone https://github.com/dptech-corp/Uni-Dock2 /path/to/Uni-Dock2
+cd /path/to/Uni-Dock2 && pixi install
+boltzina setup --register-unidock2 /path/to/Uni-Dock2
 ```
 
 ---
@@ -149,7 +151,6 @@ Install and register external tools.
 boltzina setup --all                          # Vina + MAXIT + Boltz-2 weights
 boltzina setup --install-vina                 # Vina only
 boltzina setup --install-maxit                # MAXIT only
-boltzina setup --install-unidock2             # Show Uni-Dock2 install guide
 boltzina setup --register-unidock2 /path/to/Uni-Dock2
 boltzina setup --show                         # Show current config
 ```
@@ -169,15 +170,21 @@ See `sample/CDK2/config.json` for the configuration file format.
 
 ---
 
+## Benchmark Dataset
+
+The MF-PCBA benchmark dataset used in the paper is included in `mf-pcba_test.zip`.
+See the paper for details on the evaluation protocol.
+
+---
+
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -m gpu
-```
+# Unit tests (no GPU required)
+uv run pytest tests/ --ignore=tests/test_integration.py -v
 
-Integration tests (full pipeline, requires GPU + Boltz-2 weights):
-```bash
-uv run pytest tests/test_integration.py -m "gpu" -v
+# Integration tests (requires GPU + Boltz-2 weights)
+uv run pytest tests/test_integration.py -m gpu -v
 ```
 
 ---
