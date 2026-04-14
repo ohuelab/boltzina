@@ -131,7 +131,7 @@ class Boltzina:
         self,
         receptor_pdb: str,
         output_dir: str,
-        config: str,
+        config: Optional[str] = None,
         work_dir: Optional[str] = None,
         seed: Optional[int] = None,
         num_workers: int = 4,
@@ -149,7 +149,7 @@ class Boltzina:
         scoring_only: bool = False,
         skip_docking: bool = False,
         skip_run_structure: bool = True,
-        use_kernels: bool = False,
+        use_kernels: bool = True,
         clean_intermediate_files: bool = True,
         prepared_mols_file: Optional[str] = None,
         predict_affinity_args: Optional[dict] = None,
@@ -163,8 +163,8 @@ class Boltzina:
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
-        self.config = Path(config)
-        self.work_dir = Path(work_dir)
+        self.config = Path(config) if config else None
+        self.work_dir = Path(work_dir) if work_dir else None
         self.seed = seed
         self.vina_override = vina_override
         self.boltz_override = boltz_override
@@ -211,12 +211,9 @@ class Boltzina:
         self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = None
-        manifest_path = self.work_dir / "processed" / "manifest.json"
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-        self.manifest = manifest
+        self._manifest = None  # loaded lazily via self.manifest property
 
-        self.fname = self._get_fname() if fname is None else fname
+        self.fname = fname  # resolved lazily if None (requires manifest)
         torch.set_float32_matmul_precision(self.float32_matmul_precision)
 
 
@@ -266,10 +263,30 @@ class Boltzina:
         else:
             return {}
 
+    @property
+    def manifest(self) -> dict:
+        """Lazily load manifest.json from work_dir."""
+        if self._manifest is None:
+            if self.work_dir is None:
+                raise RuntimeError(
+                    "work_dir is not set. Provide work_dir to load manifest.json."
+                )
+            manifest_path = self.work_dir / "processed" / "manifest.json"
+            with open(manifest_path, "r") as f:
+                self._manifest = json.load(f)
+        return self._manifest
+
+    @manifest.setter
+    def manifest(self, value: dict) -> None:
+        self._manifest = value
+
     def _get_fname(self) -> str:
         return self.manifest["records"][0]["id"]
 
     def run(self, ligand_files: List[str]) -> None:
+        # Resolve fname lazily here so work_dir can be set after __init__
+        if self.fname is None:
+            self.fname = self._get_fname()
         if self.scoring_only:
             print("Running scoring only...")
             self.run_scoring_only(ligand_files)
@@ -396,7 +413,7 @@ class Boltzina:
         3. Split the combined output SDF back to individual PDBs with correct atom names
         4. Run _process_pose() CIF pipeline for each pose
         """
-        from unidock2_adapter import (
+        from boltzina.docking.unidock2 import (
             parse_vina_config,
             pdb_to_sdf,
             run_unidock2_batch,
@@ -548,7 +565,7 @@ class Boltzina:
 
     def _prepare_ligand_unidock2(self, idx: int, ligand_path: Path, ligand_output_dir: Path) -> None:
         """Run Uni-Dock2 docking for a single ligand."""
-        from unidock2_adapter import (
+        from boltzina.docking.unidock2 import (
             parse_vina_config,
             pdb_to_sdf,
             run_unidock2,
@@ -1037,6 +1054,9 @@ class Boltzina:
         Run scoring-only mode for ligands with existing poses (no docking).
         Based on scoring_only.py logic.
         """
+        # Resolve fname lazily here so work_dir can be set after __init__
+        if self.fname is None:
+            self.fname = self._get_fname()
         self.ligand_files = ligand_files
         print(f"Running scoring-only mode for {len(self.ligand_files)} ligand poses...")
 

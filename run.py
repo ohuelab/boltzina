@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import json
 import argparse
-from boltzina_main import Boltzina
+from boltzina.engine import Boltzina
 from pathlib import Path
 
 
