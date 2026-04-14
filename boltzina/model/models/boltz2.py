@@ -103,7 +103,7 @@ class Boltz2(LightningModule):
         log_loss_every_steps: int = 50,
         checkpoint_diffusion_conditioning: bool = False,
         use_templates_v2: bool = False,
-        use_kernels: bool = False,
+        use_kernels: bool = True,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])

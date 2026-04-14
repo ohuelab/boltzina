@@ -12,23 +12,32 @@ import os
 import copy
 import json
 import subprocess
-import tempfile
 import yaml
 from pathlib import Path
 from typing import Optional
 
 from rdkit import Chem
 
+from boltzina.config import get_unidock2_config as _get_unidock2_config
 
-_UD2_REPO = "/home/6/uc02086/workspace-bs/collab/abc/proj-ables/repos/Uni-Dock2"
-UNIDOCK2_BIN = f"{_UD2_REPO}/.pixi/envs/default/bin/unidock2"
-# msys / AmberTools (tleap, etc.) are in 'full'; unidock_processing is in 'default'.
-# Merge both so the binary can find all dependencies.
-_UD2_PYTHONPATH = (
-    f"{_UD2_REPO}/.pixi/envs/full/lib/python3.10/site-packages"
-    f":{_UD2_REPO}/.pixi/envs/default/lib/python3.10/site-packages"
-)
-_UD2_EXTRA_PATH = f"{_UD2_REPO}/.pixi/envs/full/bin"
+
+def _get_unidock2_bin() -> str:
+    """Resolve Uni-Dock2 binary path via boltzina config."""
+    return _get_unidock2_config()["bin"]
+
+
+def _get_unidock2_env() -> dict:
+    """Return the environment dict needed to run Uni-Dock2."""
+    cfg = _get_unidock2_config()
+    env = os.environ.copy()
+    pythonpath = cfg.get("pythonpath", "")
+    extra_path = cfg.get("extra_path", "")
+    if pythonpath:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{pythonpath}:{existing}" if existing else pythonpath
+    if extra_path:
+        env["PATH"] = f"{extra_path}:{env.get('PATH', '')}"
+    return env
 
 
 def parse_vina_config(config_path: Path) -> dict:
@@ -80,7 +89,7 @@ def run_unidock2(
     output_sdf: Path,
     working_dir: Path,
     unidock2_config: Optional[dict] = None,
-    unidock2_bin: str = UNIDOCK2_BIN,
+    unidock2_bin: Optional[str] = None,
 ) -> None:
     """
     Run Uni-Dock2 docking via CLI using a temporary YAML config.
@@ -88,6 +97,8 @@ def run_unidock2(
     center: (x, y, z) floats
     temp_dir_name is forced to $HOME/tmpdir to comply with /tmp prohibition.
     """
+    if unidock2_bin is None:
+        unidock2_bin = _get_unidock2_bin()
     if unidock2_config is None:
         unidock2_config = {}
 
@@ -147,12 +158,7 @@ def run_unidock2(
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_config, f, default_flow_style=False)
 
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_UD2_PYTHONPATH}:{existing_pythonpath}" if existing_pythonpath else _UD2_PYTHONPATH
-    )
-    env["PATH"] = f"{_UD2_EXTRA_PATH}:{env.get('PATH', '')}"
+    env = _get_unidock2_env()
 
     cmd = [unidock2_bin, "docking", "-cf", str(yaml_path.resolve())]
     try:
@@ -171,7 +177,7 @@ def run_unidock2_batch(
     output_sdf: Path,
     working_dir: Path,
     unidock2_config: Optional[dict] = None,
-    unidock2_bin: str = UNIDOCK2_BIN,
+    unidock2_bin: Optional[str] = None,
 ) -> None:
     """
     Run Uni-Dock2 docking for multiple ligands in one GPU call via ligand_batch mode.
@@ -180,6 +186,8 @@ def run_unidock2_batch(
     Writes a batch text file listing all SDF paths, then calls Uni-Dock2 once.
     Output is a single combined SDF with all poses for all ligands.
     """
+    if unidock2_bin is None:
+        unidock2_bin = _get_unidock2_bin()
     if unidock2_config is None:
         unidock2_config = {}
 
@@ -247,12 +255,7 @@ def run_unidock2_batch(
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_config, f, default_flow_style=False)
 
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_UD2_PYTHONPATH}:{existing_pythonpath}" if existing_pythonpath else _UD2_PYTHONPATH
-    )
-    env["PATH"] = f"{_UD2_EXTRA_PATH}:{env.get('PATH', '')}"
+    env = _get_unidock2_env()
 
     cmd = [unidock2_bin, "docking", "-cf", str(yaml_path.resolve())]
     try:
