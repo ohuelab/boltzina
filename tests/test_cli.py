@@ -218,10 +218,11 @@ class TestImportChain:
         from boltzina.engine import Boltzina  # noqa: F401
         assert Boltzina is not None
 
-    def test_boltzina_init_exports_boltzina(self):
-        """boltzina.__init__ must re-export Boltzina from boltzina.engine."""
+    def test_boltzina_version_accessible(self):
+        """boltzina.__version__ must be accessible without loading heavy deps."""
         import boltzina
-        assert hasattr(boltzina, "Boltzina"), "boltzina.Boltzina not found — import chain broken"
+        assert hasattr(boltzina, "__version__"), "boltzina.__version__ not found"
+        assert boltzina.__version__
 
     def test_runner_importable(self):
         """BoltzinaRunner must be importable without ModuleNotFoundError."""
