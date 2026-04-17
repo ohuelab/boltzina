@@ -323,22 +323,47 @@ def split_batch_sdf_to_pdbs(
             continue
 
         template_mol = template_mols[lig_idx]
-        n_template = template_mol.GetNumAtoms()
-        n_docked = docked_mol.GetNumAtoms()
-        if n_template != n_docked:
-            print(
-                f"Warning: atom count mismatch for ligand {lig_idx} pose {pose_idx}: "
-                f"template={n_template}, docked={n_docked}. Skipping."
-            )
-            continue
 
-        # Deep copy template (preserves atom names), overwrite coordinates
+        # Map template (heavy atoms) onto docked mol via substructure match.
+        # This handles two failure modes at once:
+        # 1. UniDock2 leaves explicit Hs that removeHs=True did not strip
+        #    → template is a subgraph of docked_mol; match still succeeds
+        # 2. UniDock2 reorders atoms internally
+        #    → match returns the correct permutation instead of identity
+        docked_mol_for_coords = docked_mol
+        mapping = docked_mol.GetSubstructMatch(template_mol)
+        if not mapping:
+            # Force-strip ALL hydrogens and retry
+            docked_mol_noH = Chem.RemoveAllHs(docked_mol)
+            mapping = docked_mol_noH.GetSubstructMatch(template_mol)
+            if mapping:
+                docked_mol_for_coords = docked_mol_noH
+            else:
+                # Relax bond orders to handle Kekulé vs aromatic mismatch (PDBs with broken
+                # CONECT records get sanitize=False, so bond orders differ from UniDock2 output)
+                _params = Chem.AdjustQueryParameters()
+                _params.makeBondsGeneric = True
+                _template_q = Chem.AdjustQueryProperties(template_mol, _params)
+                mapping = docked_mol_noH.GetSubstructMatch(_template_q)
+                if mapping:
+                    docked_mol_for_coords = docked_mol_noH
+                else:
+                    mapping = docked_mol.GetSubstructMatch(_template_q)
+                if not mapping:
+                    print(
+                        f"Warning: substructure match failed for ligand {lig_idx} pose {pose_idx} "
+                        f"(template={template_mol.GetNumAtoms()} atoms, "
+                        f"docked={docked_mol.GetNumAtoms()} atoms). Skipping."
+                    )
+                    continue
+        docked_conf = docked_mol_for_coords.GetConformer()
+
+        # Deep copy template (preserves atom names), overwrite coordinates via mapping
         pose_mol = copy.deepcopy(template_mol)
         conf = pose_mol.GetConformer()
-        docked_conf = docked_mol.GetConformer()
-        for atom_idx in range(n_template):
-            pos = docked_conf.GetAtomPosition(atom_idx)
-            conf.SetAtomPosition(atom_idx, pos)
+        for i in range(template_mol.GetNumAtoms()):
+            pos = docked_conf.GetAtomPosition(mapping[i])
+            conf.SetAtomPosition(i, pos)
 
         # Extract docking score
         score = None
@@ -374,8 +399,7 @@ def split_docked_sdf_to_pdbs(
 
     Atom order is guaranteed to match because:
     - template_mol is the SAME RDKit mol used to write the input SDF
-    - Uni-Dock2 preserves atom order (deepcopy + index-based coord assignment)
-    - So docked_mol atom idx N == template_mol atom idx N
+    - Atom order is resolved via GetSubstructMatch (handles reordering and extra Hs)
 
     Returns: list of (pdb_path, docking_score_or_None)
     """
@@ -390,20 +414,37 @@ def split_docked_sdf_to_pdbs(
             print(f"Warning: pose {pose_idx + 1} could not be read from docked SDF")
             continue
 
-        n_template = template_mol.GetNumAtoms()
-        n_docked = docked_mol.GetNumAtoms()
-        assert n_template == n_docked, (
-            f"Atom count mismatch between template ({n_template}) "
-            f"and docked mol ({n_docked}) at pose {pose_idx + 1}"
-        )
+        docked_mol_for_coords = docked_mol
+        mapping = docked_mol.GetSubstructMatch(template_mol)
+        if not mapping:
+            docked_mol_noH = Chem.RemoveAllHs(docked_mol)
+            mapping = docked_mol_noH.GetSubstructMatch(template_mol)
+            if mapping:
+                docked_mol_for_coords = docked_mol_noH
+            else:
+                _params = Chem.AdjustQueryParameters()
+                _params.makeBondsGeneric = True
+                _template_q = Chem.AdjustQueryProperties(template_mol, _params)
+                mapping = docked_mol_noH.GetSubstructMatch(_template_q)
+                if mapping:
+                    docked_mol_for_coords = docked_mol_noH
+                else:
+                    mapping = docked_mol.GetSubstructMatch(_template_q)
+                if not mapping:
+                    print(
+                        f"Warning: substructure match failed for pose {pose_idx + 1} "
+                        f"(template={template_mol.GetNumAtoms()} atoms, "
+                        f"docked={docked_mol.GetNumAtoms()} atoms). Skipping."
+                    )
+                    continue
+        docked_conf = docked_mol_for_coords.GetConformer()
 
-        # Deep copy template to get atom names, then overwrite coordinates
+        # Deep copy template to get atom names, then overwrite coordinates via mapping
         pose_mol = copy.deepcopy(template_mol)
         conf = pose_mol.GetConformer()
-        docked_conf = docked_mol.GetConformer()
-        for atom_idx in range(n_template):
-            pos = docked_conf.GetAtomPosition(atom_idx)
-            conf.SetAtomPosition(atom_idx, pos)
+        for i in range(template_mol.GetNumAtoms()):
+            pos = docked_conf.GetAtomPosition(mapping[i])
+            conf.SetAtomPosition(i, pos)
 
         # Extract docking score from SDF property
         score = None

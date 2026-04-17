@@ -443,6 +443,18 @@ class Boltzina:
             ligand_sdf = ligand_output_dir / "ligand.sdf"
             try:
                 template_mol = pdb_to_sdf(ligand_path, ligand_sdf)
+                # Skip ligands with degenerate 3D coordinates (all atoms collapsed to same position)
+                conf = template_mol.GetConformer()
+                positions = [conf.GetAtomPosition(i) for i in range(template_mol.GetNumAtoms())]
+                if any(
+                    positions[i].x == positions[j].x
+                    and positions[i].y == positions[j].y
+                    and positions[i].z == positions[j].z
+                    for i in range(len(positions))
+                    for j in range(i + 1, len(positions))
+                ):
+                    print(f"  Warning: skipping {ligand_path} (idx={idx}): degenerate 3D coordinates")
+                    continue
                 template_mols.append(template_mol)
                 sdf_paths.append(ligand_sdf)
                 valid_tasks.append((idx, ligand_path, ligand_output_dir))
@@ -506,9 +518,13 @@ class Boltzina:
                     total=len(pose_tasks), desc="CIF pipeline",
                 ))
 
-        # Mark done (per ligand, if all poses succeeded)
+        # Mark done only if at least one docked PDB was produced for the ligand.
+        # Unconditional touch would prevent re-runs from recovering ligands
+        # that were skipped due to substructure match failure.
         for idx, ligand_path, ligand_output_dir in valid_tasks:
-            (ligand_output_dir / "done").touch()
+            docked_ligands_dir = ligand_output_dir / "docked_ligands"
+            if any(docked_ligands_dir.glob("docked_ligand_*.pdb")):
+                (ligand_output_dir / "done").touch()
 
         # Cleanup batch intermediates
         if self.clean_intermediate_files:
@@ -1039,12 +1055,29 @@ class Boltzina:
             'affinity_pred_value2', 'affinity_probability_binary2'
         ]
 
+        # Merge with existing CSV so that incremental re-runs preserve previous results
+        existing_rows = []
+        existing_keys: set = set()
+        if output_file.exists():
+            with open(output_file, newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    key = (row.get('ligand_name', ''), row.get('ligand_idx', ''))
+                    existing_keys.add(key)
+                    existing_rows.append(row)
+
+        new_rows = [
+            r for r in self.results
+            if (str(r.get('ligand_name', '')), str(r.get('ligand_idx', ''))) not in existing_keys
+        ]
+
         with open(output_file, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(self.results)
+            writer.writerows(existing_rows)
+            writer.writerows(new_rows)
 
-        print(f"Results saved to {output_file}")
+        print(f"Results saved to {output_file} ({len(existing_rows)} existing + {len(new_rows)} new)")
 
     def get_results_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.results)
