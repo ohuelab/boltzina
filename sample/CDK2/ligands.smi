@@ -1,0 +1,7 @@
+# CDK2 inhibitor SMILES
+# Format: SMILES name
+CC(C)[C@H](CO)Nc1nc(Nc2ccc(C(=O)O)c(Cl)c2)c2ncn(C(C)C)c2n1 purvalanol_B
+CCN(CC)c1nc(Nc2ccccc2)c2ncn(C(C)CO)c2n1 roscovitine
+CN1C2=C(N=C1)N=CN=C2NCC3=CC=CO3 olomoucine
+CC1=C2C(=CN=C2N=C(N1)NCC3=CC=CC=C3)N purvalanol_A
+O=C1NC(=O)c2[nH]cnc2N1Cc1ccc(F)cc1 CHEMBL_CDK2_1

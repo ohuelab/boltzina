@@ -12,23 +12,33 @@ import os
 import copy
 import json
 import subprocess
-import tempfile
 import yaml
 from pathlib import Path
 from typing import Optional
 
 from rdkit import Chem
+from rdkit.Geometry import Point3D
+
+from boltzina.config import get_unidock2_config as _get_unidock2_config
 
 
-_UD2_REPO = "/home/6/uc02086/workspace-bs/collab/abc/proj-ables/repos/Uni-Dock2"
-UNIDOCK2_BIN = f"{_UD2_REPO}/.pixi/envs/default/bin/unidock2"
-# msys / AmberTools (tleap, etc.) are in 'full'; unidock_processing is in 'default'.
-# Merge both so the binary can find all dependencies.
-_UD2_PYTHONPATH = (
-    f"{_UD2_REPO}/.pixi/envs/full/lib/python3.10/site-packages"
-    f":{_UD2_REPO}/.pixi/envs/default/lib/python3.10/site-packages"
-)
-_UD2_EXTRA_PATH = f"{_UD2_REPO}/.pixi/envs/full/bin"
+def _get_unidock2_bin() -> str:
+    """Resolve Uni-Dock2 binary path via boltzina config."""
+    return _get_unidock2_config()["bin"]
+
+
+def _get_unidock2_env() -> dict:
+    """Return the environment dict needed to run Uni-Dock2."""
+    cfg = _get_unidock2_config()
+    env = os.environ.copy()
+    pythonpath = cfg.get("pythonpath", "")
+    extra_path = cfg.get("extra_path", "")
+    if pythonpath:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{pythonpath}:{existing}" if existing else pythonpath
+    if extra_path:
+        env["PATH"] = f"{extra_path}:{env.get('PATH', '')}"
+    return env
 
 
 def parse_vina_config(config_path: Path) -> dict:
@@ -54,8 +64,19 @@ def pdb_to_sdf(pdb_path: Path, sdf_path: Path) -> Optional[Chem.Mol]:
     """
     mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=True, sanitize=True)
     if mol is None:
-        # Retry without sanitization for unusual ligands
+        # Retry without sanitization for unusual ligands (broken CONECT → invalid valence)
         mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=True, sanitize=False)
+        if mol is not None:
+            # Partial sanitization: set aromaticity/hybridization without valence check.
+            # This fixes formal-charge mismatches that cause GetSubstructMatch to fail
+            # when comparing this template against UniDock2's fully-sanitized output.
+            try:
+                Chem.SanitizeMol(
+                    mol,
+                    Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES,
+                )
+            except Exception:
+                pass
     if mol is None:
         raise ValueError(f"RDKit could not read PDB file: {pdb_path}")
 
@@ -80,7 +101,7 @@ def run_unidock2(
     output_sdf: Path,
     working_dir: Path,
     unidock2_config: Optional[dict] = None,
-    unidock2_bin: str = UNIDOCK2_BIN,
+    unidock2_bin: Optional[str] = None,
 ) -> None:
     """
     Run Uni-Dock2 docking via CLI using a temporary YAML config.
@@ -88,6 +109,8 @@ def run_unidock2(
     center: (x, y, z) floats
     temp_dir_name is forced to $HOME/tmpdir to comply with /tmp prohibition.
     """
+    if unidock2_bin is None:
+        unidock2_bin = _get_unidock2_bin()
     if unidock2_config is None:
         unidock2_config = {}
 
@@ -147,12 +170,7 @@ def run_unidock2(
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_config, f, default_flow_style=False)
 
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_UD2_PYTHONPATH}:{existing_pythonpath}" if existing_pythonpath else _UD2_PYTHONPATH
-    )
-    env["PATH"] = f"{_UD2_EXTRA_PATH}:{env.get('PATH', '')}"
+    env = _get_unidock2_env()
 
     cmd = [unidock2_bin, "docking", "-cf", str(yaml_path.resolve())]
     try:
@@ -171,7 +189,7 @@ def run_unidock2_batch(
     output_sdf: Path,
     working_dir: Path,
     unidock2_config: Optional[dict] = None,
-    unidock2_bin: str = UNIDOCK2_BIN,
+    unidock2_bin: Optional[str] = None,
 ) -> None:
     """
     Run Uni-Dock2 docking for multiple ligands in one GPU call via ligand_batch mode.
@@ -180,6 +198,8 @@ def run_unidock2_batch(
     Writes a batch text file listing all SDF paths, then calls Uni-Dock2 once.
     Output is a single combined SDF with all poses for all ligands.
     """
+    if unidock2_bin is None:
+        unidock2_bin = _get_unidock2_bin()
     if unidock2_config is None:
         unidock2_config = {}
 
@@ -247,12 +267,7 @@ def run_unidock2_batch(
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_config, f, default_flow_style=False)
 
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_UD2_PYTHONPATH}:{existing_pythonpath}" if existing_pythonpath else _UD2_PYTHONPATH
-    )
-    env["PATH"] = f"{_UD2_EXTRA_PATH}:{env.get('PATH', '')}"
+    env = _get_unidock2_env()
 
     cmd = [unidock2_bin, "docking", "-cf", str(yaml_path.resolve())]
     try:
@@ -269,6 +284,7 @@ def split_batch_sdf_to_pdbs(
     template_mols: list,
     output_dirs: list,
     num_poses: int,
+    mask_ligand_coords: bool = False,
 ) -> None:
     """
     Split a batch Uni-Dock2 output SDF into per-ligand PDB files.
@@ -320,22 +336,51 @@ def split_batch_sdf_to_pdbs(
             continue
 
         template_mol = template_mols[lig_idx]
-        n_template = template_mol.GetNumAtoms()
-        n_docked = docked_mol.GetNumAtoms()
-        if n_template != n_docked:
-            print(
-                f"Warning: atom count mismatch for ligand {lig_idx} pose {pose_idx}: "
-                f"template={n_template}, docked={n_docked}. Skipping."
-            )
-            continue
 
-        # Deep copy template (preserves atom names), overwrite coordinates
+        # Map template (heavy atoms) onto docked mol via substructure match.
+        # This handles two failure modes at once:
+        # 1. UniDock2 leaves explicit Hs that removeHs=True did not strip
+        #    → template is a subgraph of docked_mol; match still succeeds
+        # 2. UniDock2 reorders atoms internally
+        #    → match returns the correct permutation instead of identity
+        docked_mol_for_coords = docked_mol
+        mapping = docked_mol.GetSubstructMatch(template_mol)
+        if not mapping:
+            # Force-strip ALL hydrogens and retry
+            docked_mol_noH = Chem.RemoveAllHs(docked_mol)
+            mapping = docked_mol_noH.GetSubstructMatch(template_mol)
+            if mapping:
+                docked_mol_for_coords = docked_mol_noH
+            else:
+                # Relax bond orders to handle Kekulé vs aromatic mismatch (PDBs with broken
+                # CONECT records get sanitize=False, so bond orders differ from UniDock2 output)
+                _params = Chem.AdjustQueryParameters()
+                _params.makeBondsGeneric = True
+                _template_q = Chem.AdjustQueryProperties(template_mol, _params)
+                mapping = docked_mol_noH.GetSubstructMatch(_template_q)
+                if mapping:
+                    docked_mol_for_coords = docked_mol_noH
+                else:
+                    mapping = docked_mol.GetSubstructMatch(_template_q)
+                if not mapping:
+                    print(
+                        f"Warning: substructure match failed for ligand {lig_idx} pose {pose_idx} "
+                        f"(template={template_mol.GetNumAtoms()} atoms, "
+                        f"docked={docked_mol.GetNumAtoms()} atoms). Skipping."
+                    )
+                    continue
+        docked_conf = docked_mol_for_coords.GetConformer()
+
+        # Deep copy template (preserves atom names), overwrite coordinates via mapping
         pose_mol = copy.deepcopy(template_mol)
         conf = pose_mol.GetConformer()
-        docked_conf = docked_mol.GetConformer()
-        for atom_idx in range(n_template):
-            pos = docked_conf.GetAtomPosition(atom_idx)
-            conf.SetAtomPosition(atom_idx, pos)
+        for i in range(template_mol.GetNumAtoms()):
+            pos = docked_conf.GetAtomPosition(mapping[i])
+            conf.SetAtomPosition(i, pos)
+
+        if mask_ligand_coords:
+            for i in range(template_mol.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(0.0, 0.0, 0.0))
 
         # Extract docking score
         score = None
@@ -364,6 +409,7 @@ def split_docked_sdf_to_pdbs(
     template_mol: Chem.Mol,
     output_dir: Path,
     num_poses: int,
+    mask_ligand_coords: bool = False,
 ) -> list:
     """
     Split a multi-pose SDF from Uni-Dock2 into individual PDB files,
@@ -371,8 +417,7 @@ def split_docked_sdf_to_pdbs(
 
     Atom order is guaranteed to match because:
     - template_mol is the SAME RDKit mol used to write the input SDF
-    - Uni-Dock2 preserves atom order (deepcopy + index-based coord assignment)
-    - So docked_mol atom idx N == template_mol atom idx N
+    - Atom order is resolved via GetSubstructMatch (handles reordering and extra Hs)
 
     Returns: list of (pdb_path, docking_score_or_None)
     """
@@ -387,20 +432,41 @@ def split_docked_sdf_to_pdbs(
             print(f"Warning: pose {pose_idx + 1} could not be read from docked SDF")
             continue
 
-        n_template = template_mol.GetNumAtoms()
-        n_docked = docked_mol.GetNumAtoms()
-        assert n_template == n_docked, (
-            f"Atom count mismatch between template ({n_template}) "
-            f"and docked mol ({n_docked}) at pose {pose_idx + 1}"
-        )
+        docked_mol_for_coords = docked_mol
+        mapping = docked_mol.GetSubstructMatch(template_mol)
+        if not mapping:
+            docked_mol_noH = Chem.RemoveAllHs(docked_mol)
+            mapping = docked_mol_noH.GetSubstructMatch(template_mol)
+            if mapping:
+                docked_mol_for_coords = docked_mol_noH
+            else:
+                _params = Chem.AdjustQueryParameters()
+                _params.makeBondsGeneric = True
+                _template_q = Chem.AdjustQueryProperties(template_mol, _params)
+                mapping = docked_mol_noH.GetSubstructMatch(_template_q)
+                if mapping:
+                    docked_mol_for_coords = docked_mol_noH
+                else:
+                    mapping = docked_mol.GetSubstructMatch(_template_q)
+                if not mapping:
+                    print(
+                        f"Warning: substructure match failed for pose {pose_idx + 1} "
+                        f"(template={template_mol.GetNumAtoms()} atoms, "
+                        f"docked={docked_mol.GetNumAtoms()} atoms). Skipping."
+                    )
+                    continue
+        docked_conf = docked_mol_for_coords.GetConformer()
 
-        # Deep copy template to get atom names, then overwrite coordinates
+        # Deep copy template to get atom names, then overwrite coordinates via mapping
         pose_mol = copy.deepcopy(template_mol)
         conf = pose_mol.GetConformer()
-        docked_conf = docked_mol.GetConformer()
-        for atom_idx in range(n_template):
-            pos = docked_conf.GetAtomPosition(atom_idx)
-            conf.SetAtomPosition(atom_idx, pos)
+        for i in range(template_mol.GetNumAtoms()):
+            pos = docked_conf.GetAtomPosition(mapping[i])
+            conf.SetAtomPosition(i, pos)
+
+        if mask_ligand_coords:
+            for i in range(template_mol.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(0.0, 0.0, 0.0))
 
         # Extract docking score from SDF property
         score = None

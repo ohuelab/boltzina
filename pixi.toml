@@ -1,0 +1,80 @@
+[workspace]
+name = "unidock2"
+version = "0.6.1"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[system-requirements]
+cuda = "12"
+linux = "5.14"
+
+[dependencies]
+python = "3.10.*"
+
+# Build tools
+cmake = ">=3.27"
+make = "*"
+gxx_linux-64 = "*"
+gcc_linux-64 = "*"
+cuda-nvcc = "12.8.*"
+pybind11 = "*"
+pip = "*"
+scikit-build-core = ">=0.2.0"
+setuptools = ">=64"
+
+# CUDA SDK
+cuda-version = "12.8.*"
+cuda-cudart-dev = "*"
+cuda-driver-dev = "*"
+libcurand-dev = "*"
+cuda-cudart = "*"
+
+# Python runtime
+pyyaml = "*"
+pydantic = "*"
+pathos = "*"
+numpy = "*"
+scipy = "*"
+pandas = "*"
+networkx = "*"
+rdkit = "*"
+mdanalysis = "*"
+pdbfixer = "*"
+openmm = "*"
+
+# Dev
+pytest = "*"
+ruff = "*"
+
+# dptech channel packages (msys_viparr_lpsolve55, ambertools_stable)
+[feature.dptech]
+channels = ["conda-forge", "http://quetz.dp.tech:8088/get/baymax"]
+
+[feature.dptech.dependencies]
+msys_viparr_lpsolve55 = "*"
+ambertools_stable = "*"
+
+[environments]
+full = { features = ["dptech"] }
+
+[tasks]
+# Build the CUDA/C++ docking engine (H100 = sm_90)
+build-engine = { cmd = "pip install --no-build-isolation ./unidock/unidock_engine", env = { CMAKE_CUDA_ARCHITECTURES = "90" } }
+
+# Build the pure-Python processing package
+build-processing = { cmd = "pip install --no-build-isolation .", depends-on = ["build-engine"] }
+
+# Full build: engine then processing
+build = { depends-on = ["build-engine", "build-processing"] }
+
+# Verify installation
+check = { cmd = "python -c \"from unidock_engine.api.python.pipeline import DockingPipeline; print('Engine OK'); import unidock_processing; print('Processing OK')\"" }
+
+# Run tests
+test = { cmd = "pytest unidock/unidock_processing/test -v" }
+
+# Lint
+lint = { cmd = "ruff check unidock/unidock_processing/" }
+
+# Clean build artifacts
+clean = { cmd = "rm -rf build/ dist/ *.egg-info unidock/unidock_engine/build/" }

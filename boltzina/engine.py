@@ -131,7 +131,7 @@ class Boltzina:
         self,
         receptor_pdb: str,
         output_dir: str,
-        config: str,
+        config: Optional[str] = None,
         work_dir: Optional[str] = None,
         seed: Optional[int] = None,
         num_workers: int = 4,
@@ -149,7 +149,7 @@ class Boltzina:
         scoring_only: bool = False,
         skip_docking: bool = False,
         skip_run_structure: bool = True,
-        use_kernels: bool = False,
+        use_kernels: bool = True,
         clean_intermediate_files: bool = True,
         prepared_mols_file: Optional[str] = None,
         predict_affinity_args: Optional[dict] = None,
@@ -160,11 +160,12 @@ class Boltzina:
         run_trunk_and_structure: bool = True, # Strongly recommended to be True
         docking_engine: str = "vina",
         unidock2_config: Optional[dict] = None,
+        mask_ligand_coords: bool = False,
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
-        self.config = Path(config)
-        self.work_dir = Path(work_dir)
+        self.config = Path(config) if config else None
+        self.work_dir = Path(work_dir) if work_dir else None
         self.seed = seed
         self.vina_override = vina_override
         self.boltz_override = boltz_override
@@ -191,6 +192,7 @@ class Boltzina:
         self.run_trunk_and_structure = run_trunk_and_structure
         self.docking_engine = docking_engine
         self.unidock2_config = unidock2_config or {}
+        self.mask_ligand_coords = mask_ligand_coords
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
@@ -211,12 +213,9 @@ class Boltzina:
         self.cache_dir = Path(get_cache_path())
         self.ccd_path = self.cache_dir / 'ccd.pkl'
         self.ccd = None
-        manifest_path = self.work_dir / "processed" / "manifest.json"
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-        self.manifest = manifest
+        self._manifest = None  # loaded lazily via self.manifest property
 
-        self.fname = self._get_fname() if fname is None else fname
+        self.fname = fname  # resolved lazily if None (requires manifest)
         torch.set_float32_matmul_precision(self.float32_matmul_precision)
 
 
@@ -266,10 +265,30 @@ class Boltzina:
         else:
             return {}
 
+    @property
+    def manifest(self) -> dict:
+        """Lazily load manifest.json from work_dir."""
+        if self._manifest is None:
+            if self.work_dir is None:
+                raise RuntimeError(
+                    "work_dir is not set. Provide work_dir to load manifest.json."
+                )
+            manifest_path = self.work_dir / "processed" / "manifest.json"
+            with open(manifest_path, "r") as f:
+                self._manifest = json.load(f)
+        return self._manifest
+
+    @manifest.setter
+    def manifest(self, value: dict) -> None:
+        self._manifest = value
+
     def _get_fname(self) -> str:
         return self.manifest["records"][0]["id"]
 
     def run(self, ligand_files: List[str]) -> None:
+        # Resolve fname lazily here so work_dir can be set after __init__
+        if self.fname is None:
+            self.fname = self._get_fname()
         if self.scoring_only:
             print("Running scoring only...")
             self.run_scoring_only(ligand_files)
@@ -396,7 +415,7 @@ class Boltzina:
         3. Split the combined output SDF back to individual PDBs with correct atom names
         4. Run _process_pose() CIF pipeline for each pose
         """
-        from unidock2_adapter import (
+        from boltzina.docking.unidock2 import (
             parse_vina_config,
             pdb_to_sdf,
             run_unidock2_batch,
@@ -426,6 +445,27 @@ class Boltzina:
             ligand_sdf = ligand_output_dir / "ligand.sdf"
             try:
                 template_mol = pdb_to_sdf(ligand_path, ligand_sdf)
+                # Skip ligands with degenerate 3D coordinates (all atoms collapsed to same position)
+                conf = template_mol.GetConformer()
+                positions = [conf.GetAtomPosition(i) for i in range(template_mol.GetNumAtoms())]
+                if any(
+                    positions[i].x == positions[j].x
+                    and positions[i].y == positions[j].y
+                    and positions[i].z == positions[j].z
+                    for i in range(len(positions))
+                    for j in range(i + 1, len(positions))
+                ):
+                    print(f"  Warning: skipping {ligand_path} (idx={idx}): degenerate 3D coordinates")
+                    continue
+                # Verify SDF roundtrip: UniDock2 rejects ligands with broken bond orders
+                # (e.g. C with valence 5 from bad CONECT records) and re-numbers its
+                # outputs sequentially among accepted ligands. If we include a rejected
+                # ligand in template_mols, all subsequent index lookups are offset by one.
+                _test_supp = Chem.SDMolSupplier(str(ligand_sdf), sanitize=True)
+                _test_mol = next(iter(_test_supp), None)
+                if _test_mol is None:
+                    print(f"  Warning: skipping {ligand_path} (idx={idx}): SDF not readable by RDKit (UniDock2 would reject it)")
+                    continue
                 template_mols.append(template_mol)
                 sdf_paths.append(ligand_sdf)
                 valid_tasks.append((idx, ligand_path, ligand_output_dir))
@@ -457,6 +497,7 @@ class Boltzina:
             template_mols=template_mols,
             output_dirs=output_dirs,
             num_poses=self.num_boltz_poses,
+            mask_ligand_coords=self.mask_ligand_coords,
         )
 
         # Step 4: CIF pipeline — parallel across all poses (independent files)
@@ -489,9 +530,13 @@ class Boltzina:
                     total=len(pose_tasks), desc="CIF pipeline",
                 ))
 
-        # Mark done (per ligand, if all poses succeeded)
+        # Mark done only if at least one docked PDB was produced for the ligand.
+        # Unconditional touch would prevent re-runs from recovering ligands
+        # that were skipped due to substructure match failure.
         for idx, ligand_path, ligand_output_dir in valid_tasks:
-            (ligand_output_dir / "done").touch()
+            docked_ligands_dir = ligand_output_dir / "docked_ligands"
+            if any(docked_ligands_dir.glob("docked_ligand_*.pdb")):
+                (ligand_output_dir / "done").touch()
 
         # Cleanup batch intermediates
         if self.clean_intermediate_files:
@@ -548,7 +593,7 @@ class Boltzina:
 
     def _prepare_ligand_unidock2(self, idx: int, ligand_path: Path, ligand_output_dir: Path) -> None:
         """Run Uni-Dock2 docking for a single ligand."""
-        from unidock2_adapter import (
+        from boltzina.docking.unidock2 import (
             parse_vina_config,
             pdb_to_sdf,
             run_unidock2,
@@ -595,6 +640,7 @@ class Boltzina:
             template_mol=template_mol,
             output_dir=docked_ligands_dir,
             num_poses=self.num_boltz_poses,
+            mask_ligand_coords=self.mask_ligand_coords,
         )
 
         # Process each pose through the shared CIF pipeline
@@ -1022,12 +1068,29 @@ class Boltzina:
             'affinity_pred_value2', 'affinity_probability_binary2'
         ]
 
+        # Merge with existing CSV so that incremental re-runs preserve previous results
+        existing_rows = []
+        existing_keys: set = set()
+        if output_file.exists():
+            with open(output_file, newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    key = (row.get('ligand_name', ''), row.get('ligand_idx', ''))
+                    existing_keys.add(key)
+                    existing_rows.append(row)
+
+        new_rows = [
+            r for r in self.results
+            if (str(r.get('ligand_name', '')), str(r.get('ligand_idx', ''))) not in existing_keys
+        ]
+
         with open(output_file, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(self.results)
+            writer.writerows(existing_rows)
+            writer.writerows(new_rows)
 
-        print(f"Results saved to {output_file}")
+        print(f"Results saved to {output_file} ({len(existing_rows)} existing + {len(new_rows)} new)")
 
     def get_results_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self.results)
@@ -1037,6 +1100,9 @@ class Boltzina:
         Run scoring-only mode for ligands with existing poses (no docking).
         Based on scoring_only.py logic.
         """
+        # Resolve fname lazily here so work_dir can be set after __init__
+        if self.fname is None:
+            self.fname = self._get_fname()
         self.ligand_files = ligand_files
         print(f"Running scoring-only mode for {len(self.ligand_files)} ligand poses...")
 

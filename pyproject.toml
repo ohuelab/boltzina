@@ -1,16 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "boltzina-env"
-version = "0.1.0"
-description = "Environment for boltzina"
+name = "boltzina"
+version = "1.0.0"
+description = "Efficient and accurate virtual screening via docking-guided binding prediction with Boltz-2"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Kairi Furui", email = "furui@li.comp.isct.ac.jp" },
+]
+keywords = ["virtual screening", "molecular docking", "protein-ligand binding", "boltz", "affinity prediction"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "boltz[cuda]>=2.2.0",
     "openbabel-wheel>=3.1.1.22",
     "pdb-tools>=2.5.0",
     "triton==3.3.0",
-    "meeko>=0.6.1"
+    "meeko>=0.6.1",
+    "click>=8.0",
+    "tomli>=2.0; python_version < '3.11'",
+    "tomli-w>=1.0",
+    "click-option-group>=0.5.9",
 ]
+
+[project.urls]
+Repository = "https://github.com/ohuelab/boltzina"
+Issues = "https://github.com/ohuelab/boltzina/issues"
+
+[project.scripts]
+boltzina = "boltzina.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["*"]
+include = ["boltzina*"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: requires GPU", "slow: slow integration test"]

@@ -8,7 +8,7 @@ from boltzina.model.models.boltz2 import Boltz2
 from boltzina.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltzina.data.write.writer import BoltzAffinityWriter
 
-def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False, use_kernels=False, run_trunk_and_structure=True, predict_affinity_args = None, pairformer_args = None, msa_args = None, steering_args = None, diffusion_process_args = None):
+def load_boltz2_model(affinity_checkpoint=None, sampling_steps_affinity=200, diffusion_samples_affinity=5, subsample_msa=True, num_subsampled_msa=1024, model="boltz2", step_scale=None, affinity_mw_correction=False, skip_run_structure=True, confidence_prediction=False, use_kernels=True, run_trunk_and_structure=True, predict_affinity_args = None, pairformer_args = None, msa_args = None, steering_args = None, diffusion_process_args = None):
     """Load and return a Boltz2 model for affinity prediction.
 
     Args:
