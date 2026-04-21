@@ -160,6 +160,7 @@ class Boltzina:
         run_trunk_and_structure: bool = True, # Strongly recommended to be True
         docking_engine: str = "vina",
         unidock2_config: Optional[dict] = None,
+        mask_ligand_coords: bool = False,
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
@@ -191,6 +192,7 @@ class Boltzina:
         self.run_trunk_and_structure = run_trunk_and_structure
         self.docking_engine = docking_engine
         self.unidock2_config = unidock2_config or {}
+        self.mask_ligand_coords = mask_ligand_coords
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
@@ -455,6 +457,15 @@ class Boltzina:
                 ):
                     print(f"  Warning: skipping {ligand_path} (idx={idx}): degenerate 3D coordinates")
                     continue
+                # Verify SDF roundtrip: UniDock2 rejects ligands with broken bond orders
+                # (e.g. C with valence 5 from bad CONECT records) and re-numbers its
+                # outputs sequentially among accepted ligands. If we include a rejected
+                # ligand in template_mols, all subsequent index lookups are offset by one.
+                _test_supp = Chem.SDMolSupplier(str(ligand_sdf), sanitize=True)
+                _test_mol = next(iter(_test_supp), None)
+                if _test_mol is None:
+                    print(f"  Warning: skipping {ligand_path} (idx={idx}): SDF not readable by RDKit (UniDock2 would reject it)")
+                    continue
                 template_mols.append(template_mol)
                 sdf_paths.append(ligand_sdf)
                 valid_tasks.append((idx, ligand_path, ligand_output_dir))
@@ -486,6 +497,7 @@ class Boltzina:
             template_mols=template_mols,
             output_dirs=output_dirs,
             num_poses=self.num_boltz_poses,
+            mask_ligand_coords=self.mask_ligand_coords,
         )
 
         # Step 4: CIF pipeline — parallel across all poses (independent files)
@@ -628,6 +640,7 @@ class Boltzina:
             template_mol=template_mol,
             output_dir=docked_ligands_dir,
             num_poses=self.num_boltz_poses,
+            mask_ligand_coords=self.mask_ligand_coords,
         )
 
         # Process each pose through the shared CIF pipeline

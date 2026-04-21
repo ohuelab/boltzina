@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from rdkit import Chem
+from rdkit.Geometry import Point3D
 
 from boltzina.config import get_unidock2_config as _get_unidock2_config
 
@@ -63,8 +64,19 @@ def pdb_to_sdf(pdb_path: Path, sdf_path: Path) -> Optional[Chem.Mol]:
     """
     mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=True, sanitize=True)
     if mol is None:
-        # Retry without sanitization for unusual ligands
+        # Retry without sanitization for unusual ligands (broken CONECT → invalid valence)
         mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=True, sanitize=False)
+        if mol is not None:
+            # Partial sanitization: set aromaticity/hybridization without valence check.
+            # This fixes formal-charge mismatches that cause GetSubstructMatch to fail
+            # when comparing this template against UniDock2's fully-sanitized output.
+            try:
+                Chem.SanitizeMol(
+                    mol,
+                    Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES,
+                )
+            except Exception:
+                pass
     if mol is None:
         raise ValueError(f"RDKit could not read PDB file: {pdb_path}")
 
@@ -272,6 +284,7 @@ def split_batch_sdf_to_pdbs(
     template_mols: list,
     output_dirs: list,
     num_poses: int,
+    mask_ligand_coords: bool = False,
 ) -> None:
     """
     Split a batch Uni-Dock2 output SDF into per-ligand PDB files.
@@ -365,6 +378,10 @@ def split_batch_sdf_to_pdbs(
             pos = docked_conf.GetAtomPosition(mapping[i])
             conf.SetAtomPosition(i, pos)
 
+        if mask_ligand_coords:
+            for i in range(template_mol.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(0.0, 0.0, 0.0))
+
         # Extract docking score
         score = None
         if docked_mol.HasProp("vina_binding_free_energy"):
@@ -392,6 +409,7 @@ def split_docked_sdf_to_pdbs(
     template_mol: Chem.Mol,
     output_dir: Path,
     num_poses: int,
+    mask_ligand_coords: bool = False,
 ) -> list:
     """
     Split a multi-pose SDF from Uni-Dock2 into individual PDB files,
@@ -445,6 +463,10 @@ def split_docked_sdf_to_pdbs(
         for i in range(template_mol.GetNumAtoms()):
             pos = docked_conf.GetAtomPosition(mapping[i])
             conf.SetAtomPosition(i, pos)
+
+        if mask_ligand_coords:
+            for i in range(template_mol.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(0.0, 0.0, 0.0))
 
         # Extract docking score from SDF property
         score = None

@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--docking_engine", type=str, default=None, choices=["vina", "unidock2"], help="Docking engine (overrides config)")
+    parser.add_argument("--mask_ligand_coords", action="store_true", help="Replace UniDock2 pose ligand coordinates with (0,0,0) before CIF construction (NoPose-like variant)")
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config_dict = json.load(f)
@@ -78,6 +79,7 @@ def main():
         clean_intermediate_files = not args.keep_intermediate_files,
         docking_engine = docking_engine,
         unidock2_config = unidock2_config,
+        mask_ligand_coords = args.mask_ligand_coords,
     )
 
     boltzina.run(ligand_files)
