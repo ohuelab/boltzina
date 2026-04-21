@@ -7,12 +7,11 @@ Boltzina is a pipeline that combines AutoDock Vina (or Uni-Dock2) docking with B
 ### Installation
 
 ```bash
-# Using uv (recommended)
-uv venv
-uv sync
+# From PyPI
+pip install boltzina
 
-# Or using pip
-pip install .
+# From source (development)
+uv sync
 ```
 
 ### Tool setup (Vina, MAXIT, Boltz-2 model weights)
