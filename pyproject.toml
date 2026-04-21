@@ -14,8 +14,14 @@ authors = [
 ]
 keywords = ["virtual screening", "molecular docking", "protein-ligand binding", "boltz", "affinity prediction"]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
@@ -32,8 +38,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage  = "https://github.com/ohuelab/boltzina"
 Repository = "https://github.com/ohuelab/boltzina"
 Issues = "https://github.com/ohuelab/boltzina/issues"
+Changelog = "https://github.com/ohuelab/boltzina/blob/main/CHANGELOG.md"
 
 [project.scripts]
 boltzina = "boltzina.cli:main"

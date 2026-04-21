@@ -1,0 +1,10 @@
+global-exclude __pycache__
+global-exclude *.py[cod]
+prune boltzina.egg-info
+prune tests
+prune sample
+prune scripts
+prune local
+prune .venv
+exclude mf-pcba_test.zip
+exclude maxit.log
