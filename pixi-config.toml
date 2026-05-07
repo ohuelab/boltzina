@@ -1,0 +1,5 @@
+[repodata-config."http://quetz.dp.tech:8088"]
+disable-sharded = true
+disable-zstd = true
+disable-bzip2 = true
+disable-jlap = true

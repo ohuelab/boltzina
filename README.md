@@ -25,7 +25,8 @@ For Uni-Dock2 (GPU-accelerated docking, requires [pixi](https://pixi.sh) and CUD
 # Clone Uni-Dock2 and build using the provided pixi.toml
 git clone https://github.com/dptech-corp/Uni-Dock2 /path/to/Uni-Dock2
 cp pixi.toml /path/to/Uni-Dock2/
-cd /path/to/Uni-Dock2 && pixi install && pixi run build
+mkdir -p /path/to/Uni-Dock2/.pixi && cp pixi-config.toml /path/to/Uni-Dock2/.pixi/config.toml
+cd /path/to/Uni-Dock2 && pixi install --all && pixi run build
 boltzina setup --register-unidock2 /path/to/Uni-Dock2
 ```
 
