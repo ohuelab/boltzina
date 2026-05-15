@@ -22,6 +22,7 @@ from rdkit import Chem
 from boltzina.preparation import (
     _assign_pdb_atom_names,
     _has_3d_coords,
+    _parse_smiles_file_line,
     prepare_ligands_from_file,
     prepare_mol_from_smiles,
     prepare_mol_from_sdf_mol,
@@ -178,6 +179,15 @@ class TestPrepareMolFromSdfMol:
 # ---------------------------------------------------------------------------
 
 class TestPrepareLigandsFromFile:
+    def test_parse_cxsmiles_line_uses_real_ligand_name(self):
+        smiles, name = _parse_smiles_file_line(
+            "C[C@H](O)F |&1:1| lig_00007_s_test",
+            line_no=1,
+        )
+        assert name == "lig_00007_s_test"
+        assert " " not in smiles
+        assert "|" not in smiles
+
     def test_smi_input(self, simple_smi_file, tmp_out):
         pdb_paths, pkl_path = prepare_ligands_from_file(
             input_path=simple_smi_file,
@@ -235,6 +245,35 @@ class TestPrepareLigandsFromFile:
         )
         for p in pdb_paths:
             assert p.stem.startswith("LIG"), f"Unexpected name: {p.stem}"
+
+    def test_cxsmiles_annotation_is_not_used_as_name(self, tmp_path, tmp_out):
+        smi_path = tmp_path / "cxsmiles.smi"
+        smi_path.write_text("C[C@H](O)F |&1:1| lig_00007_s_test\n")
+        pdb_paths, pkl_path = prepare_ligands_from_file(
+            input_path=smi_path,
+            output_dir=tmp_out,
+        )
+
+        assert len(pdb_paths) == 1
+        assert pdb_paths[0].stem == "lig_00007_s_test"
+        assert pkl_path.exists()
+        with open(pkl_path, "rb") as f:
+            mols = pickle.load(f)
+        assert set(mols) == {"lig_00007_s_test"}
+        assert not (tmp_out / "input_pdbs" / "|&1:1|.pdb").exists()
+
+    def test_cxsmiles_without_name_uses_ligand_prefix(self, tmp_path, tmp_out):
+        smi_path = tmp_path / "cxsmiles_unnamed.smi"
+        smi_path.write_text("C[C@H](O)F |&1:1|\n")
+        pdb_paths, _ = prepare_ligands_from_file(
+            input_path=smi_path,
+            output_dir=tmp_out,
+            ligand_prefix="LIG",
+        )
+
+        assert len(pdb_paths) == 1
+        assert pdb_paths[0].stem == "LIG0"
+        assert not (tmp_out / "input_pdbs" / "|&1:1|.pdb").exists()
 
     def test_directory_input(self, tmp_path):
         """Directory input: all .smi/.sdf files in the directory are merged."""

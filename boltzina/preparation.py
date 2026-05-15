@@ -27,6 +27,51 @@ from boltz.data.parse.schema import compute_3d_conformer
 Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
 
+def _parse_smiles_file_line(
+    line: str,
+    line_no: int,
+    ligand_prefix: Optional[str] = None,
+) -> Tuple[str, str]:
+    """
+    Parse one SMILES-file record into a single-token SMILES and ligand name.
+
+    RDKit can parse records of the form "SMILES [CXSMILES] [name]" when
+    allowCXSMILES and parseName are enabled. Using it here prevents CXSMILES
+    enhanced-stereo annotations such as "|&1:1,11|" from being mistaken for
+    the ligand name.
+    """
+    params = Chem.SmilesParserParams()
+    params.allowCXSMILES = True
+    params.parseName = True
+    mol = Chem.MolFromSmiles(line, params)
+
+    if mol is None:
+        parts = line.split()
+        smiles = parts[0]
+        if len(parts) < 2:
+            if ligand_prefix is None:
+                raise ValueError(
+                    f"Ligand name missing on line {line_no} and --ligand-prefix not set."
+                )
+            name = f"{ligand_prefix}{line_no - 1}"
+        else:
+            name = parts[1]
+        return smiles, name
+
+    name = mol.GetProp("_Name").strip() if mol.HasProp("_Name") else ""
+    if not name:
+        if ligand_prefix is None:
+            raise ValueError(
+                f"Ligand name missing on line {line_no} and --ligand-prefix not set."
+            )
+        name = f"{ligand_prefix}{line_no - 1}"
+    else:
+        name = name.split()[0]
+
+    smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
+    return smiles, name
+
+
 def _has_3d_coords(mol: Mol) -> bool:
     """Return True if the molecule has non-trivial 3D coordinates."""
     if mol.GetNumConformers() == 0:
@@ -146,7 +191,8 @@ def prepare_ligands_from_smiles_file(
     """
     Prepare all ligands from a SMILES file.
 
-    File format: one "SMILES name" per line (name is optional if ligand_prefix is set).
+    File format: one "SMILES [CXSMILES] name" per line
+    (name is optional if ligand_prefix is set).
 
     Returns:
         (pdb_paths, pkl_path): list of prepared PDB paths and path to prepared_mols.pkl
@@ -161,16 +207,7 @@ def prepare_ligands_from_smiles_file(
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split()
-            smiles = parts[0]
-            if len(parts) < 2:
-                if ligand_prefix is None:
-                    raise ValueError(
-                        f"Ligand name missing on line {i+1} and --ligand-prefix not set."
-                    )
-                name = f"{ligand_prefix}{i}"
-            else:
-                name = parts[1]
+            smiles, name = _parse_smiles_file_line(line, i + 1, ligand_prefix)
             smiles_dict[name] = smiles
 
     return _prepare_smiles_dict(smiles_dict, output_dir)
