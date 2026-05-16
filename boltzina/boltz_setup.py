@@ -3,7 +3,7 @@ Boltz-2 setup utilities for Boltzina.
 
 Provides:
   - generate_boltz_yaml(): Create Boltz-2 YAML from sequences + reference SMILES
-  - run_boltz_predict(): Call boltz.main.predict() Python API
+  - run_boltz_predict(): Call the underlying boltz predict callback
   - extract_receptor_pdb(): Extract protein chain from Boltz-2 CIF output
   - setup_boltz_for_run(): Orchestrate prediction (generate YAML → predict → extract PDB)
   - setup_boltz_for_run_from_yaml(): Same but using a pre-written YAML file
@@ -13,18 +13,33 @@ from __future__ import annotations
 
 import re
 import string
+import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
 from boltzina.config import get_boltz_cache
+from boltzina.tools import resolve_executable, runtime_env
+
+
+def _ensure_boltz_rdkit_compat() -> None:
+    """Patch RDKit symbols expected by Boltz across RDKit releases."""
+    try:
+        from rdkit.Chem import AllChem, Descriptors
+    except ImportError:
+        return
+
+    if not hasattr(AllChem, "Descriptors"):
+        AllChem.Descriptors = Descriptors
 
 
 def generate_boltz_yaml(
     sequences: list[str],
     representative_smiles: str,
     output_path: Path,
+    use_msa_server: bool = False,
 ) -> tuple[Path, str]:
     """
     Generate a Boltz-2 YAML input file from one or more protein sequences.
@@ -39,6 +54,9 @@ def generate_boltz_yaml(
                                site; used for grid center determination after
                                structure prediction).
         output_path: Path to write the generated YAML file.
+        use_msa_server: If False, mark protein MSAs as empty so Boltz can run
+                        offline. If True, leave MSA unspecified so Boltz can
+                        generate it with the configured server.
 
     Returns:
         (yaml_path, ligand_chain_id): Path to the written YAML and the ligand's
@@ -72,12 +90,16 @@ def generate_boltz_yaml(
             )
         clean_seqs.append(seq)
 
+    protein_entries = []
+    for chain_id, seq in zip(protein_chain_ids, clean_seqs):
+        protein = {"id": chain_id, "sequence": seq}
+        if not use_msa_server:
+            protein["msa"] = "empty"
+        protein_entries.append({"protein": protein})
+
     config = {
         "version": 1,
-        "sequences": [
-            {"protein": {"id": chain_id, "sequence": seq}}
-            for chain_id, seq in zip(protein_chain_ids, clean_seqs)
-        ]
+        "sequences": protein_entries
         + [
             {"ligand": {"id": ligand_chain_id, "smiles": representative_smiles}}
         ],
@@ -92,6 +114,48 @@ def generate_boltz_yaml(
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     return output_path, ligand_chain_id
+
+
+def _add_empty_msa_to_proteins(yaml_data: dict) -> bool:
+    """Set missing protein MSA entries to 'empty' for offline Boltz runs."""
+    changed = False
+    for entry in yaml_data.get("sequences", []):
+        if not isinstance(entry, dict):
+            continue
+        protein = entry.get("protein")
+        if not isinstance(protein, dict):
+            continue
+        if protein.get("msa") in (None, ""):
+            protein["msa"] = "empty"
+            changed = True
+    return changed
+
+
+def _prepare_yaml_for_boltz_run(
+    yaml_path: Path,
+    dest_yaml: Path,
+    use_msa_server: bool,
+) -> Path:
+    """Copy YAML into the work directory, adding offline MSA markers if needed."""
+    yaml_path = Path(yaml_path)
+    dest_yaml = Path(dest_yaml)
+
+    if use_msa_server:
+        if dest_yaml.resolve() != yaml_path.resolve():
+            dest_yaml.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(yaml_path, dest_yaml)
+        return dest_yaml
+
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+
+    changed = _add_empty_msa_to_proteins(data)
+    if changed or dest_yaml.resolve() != yaml_path.resolve():
+        dest_yaml.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest_yaml, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return dest_yaml
 
 
 def run_boltz_predict(
@@ -124,13 +188,13 @@ def run_boltz_predict(
     preprocessing_threads: int = 1,
 ) -> Path:
     """
-    Run Boltz-2 structure prediction via the Python API.
+    Run Boltz-2 structure prediction.
 
     Args:
         yaml_path: Path to the Boltz-2 YAML input file
         out_dir: Parent output directory (boltz creates a subdir inside)
         cache: Boltz model cache dir (defaults to ~/.boltz)
-        ... (Boltz-2 prediction parameters, see boltz.main.predict)
+        ... (Boltz-2 prediction parameters, see boltz.main.predict.callback)
 
     Returns:
         work_dir: The actual Boltz-2 output directory
@@ -141,7 +205,14 @@ def run_boltz_predict(
     if cache is None:
         cache = get_boltz_cache()
 
-    predict(
+    _ensure_boltz_rdkit_compat()
+
+    # boltz.main.predict is a click.Command in Boltz 2.x. Calling that command
+    # object with keyword arguments sends them to click.Context and raises
+    # "unexpected keyword argument 'data'". Use the wrapped callback instead.
+    predict_callback = getattr(predict, "callback", predict)
+
+    predict_callback(
         data=str(yaml_path),
         out_dir=str(out_dir),
         cache=str(cache),
@@ -227,11 +298,22 @@ def _convert_cif_to_protein_pdb(cif_path: Path, output_pdb: Path) -> None:
     output_pdb.parent.mkdir(parents=True, exist_ok=True)
     tmp_pdb = output_pdb.with_suffix(".tmp.pdb")
 
-    # Try pdb_fromcif (pdb-tools)
+    pdb_fromcif = resolve_executable(
+        "pdb_fromcif",
+        env_var="BOLTZINA_PDB_FROMCIF_PATH",
+        required=False,
+    )
+    command = [pdb_fromcif, str(cif_path)] if pdb_fromcif else [
+        sys.executable,
+        "-m",
+        "pdbtools.pdb_fromcif",
+        str(cif_path),
+    ]
     result = subprocess.run(
-        ["pdb_fromcif", str(cif_path)],
+        command,
         capture_output=True,
         text=True,
+        env=runtime_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"pdb_fromcif failed: {result.stderr}")
@@ -367,6 +449,7 @@ def setup_boltz_for_run(
             sequences=sequences,
             representative_smiles=representative_smiles,
             output_path=yaml_path,
+            use_msa_server=bool(boltz_kwargs.get("use_msa_server")),
         )
         print(f"Generated Boltz-2 input YAML: {yaml_path}")
         print("Running Boltz-2 structure prediction...")
@@ -403,8 +486,6 @@ def setup_boltz_for_run_from_yaml(
     Returns:
         (work_dir, receptor_pdb, ligand_chain_id)
     """
-    import shutil
-
     boltz_kwargs = boltz_kwargs or {}
     work_base_dir = Path(work_base_dir)
     work_base_dir.mkdir(parents=True, exist_ok=True)
@@ -423,8 +504,11 @@ def setup_boltz_for_run_from_yaml(
         # Copy YAML into work_base_dir with fname as stem so boltz creates
         # the expected boltz_results_{fname} output directory
         dest_yaml = work_base_dir / f"{fname}.yaml"
-        if dest_yaml.resolve() != yaml_path.resolve():
-            shutil.copy2(yaml_path, dest_yaml)
+        dest_yaml = _prepare_yaml_for_boltz_run(
+            yaml_path=yaml_path,
+            dest_yaml=dest_yaml,
+            use_msa_server=bool(boltz_kwargs.get("use_msa_server")),
+        )
         print(f"Running Boltz-2 structure prediction (from YAML: {yaml_path.name})...")
         work_dir = run_boltz_predict(
             yaml_path=dest_yaml,

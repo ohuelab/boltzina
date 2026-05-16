@@ -202,6 +202,64 @@ class PredictionDataset(torch.utils.data.Dataset):
         self.affinity = affinity
         if self.affinity:
             self.cropper = AffinityCropper()
+        self.failed_records: list[dict[str, str]] = []
+        self.valid_indices = list(range(len(self.manifest.records)))
+        if self.affinity:
+            self.valid_indices = self._prefilter_affinity_records()
+
+    def _record_error(self, record: Record, stage: str, error: Exception) -> RuntimeError:
+        return RuntimeError(f"{stage} failed on {record.id}: {error}")
+
+    def _load_and_crop(self, record: Record) -> tuple[Input, object]:
+        try:
+            input_data = load_input(
+                record=record,
+                target_dir=self.target_dir,
+                msa_dir=self.msa_dir,
+                constraints_dir=self.constraints_dir,
+                template_dir=self.template_dir,
+                extra_mols_dir=self.extra_mols_dir,
+                affinity=self.affinity,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise self._record_error(record, "Input loading", e) from e
+
+        try:
+            tokenized = self.tokenizer.tokenize(input_data)
+        except Exception as e:  # noqa: BLE001
+            raise self._record_error(record, "Tokenizer", e) from e
+
+        if self.affinity:
+            try:
+                tokenized = self.cropper.crop(
+                    tokenized,
+                    max_tokens=256,
+                    max_atoms=2048,
+                )
+            except Exception as e:  # noqa: BLE001
+                raise self._record_error(record, "Affinity cropper", e) from e
+
+        return input_data, tokenized
+
+    def _prefilter_affinity_records(self) -> list[int]:
+        valid_indices = []
+        for idx, record in enumerate(self.manifest.records):
+            try:
+                self._load_and_crop(record)
+            except RuntimeError as e:
+                print(f"{e}. Skipping record.")  # noqa: T201
+                self.failed_records.append({"id": record.id, "error": str(e)})
+                continue
+            valid_indices.append(idx)
+
+        if self.failed_records:
+            failed_ids = ", ".join(item["id"] for item in self.failed_records[:10])
+            if len(self.failed_records) > 10:
+                failed_ids += ", ..."
+            print(  # noqa: T201
+                f"Skipping {len(self.failed_records)} invalid affinity record(s): {failed_ids}"
+            )
+        return valid_indices
 
     def __getitem__(self, idx: int) -> dict:
         """Get an item from the dataset.
@@ -213,38 +271,8 @@ class PredictionDataset(torch.utils.data.Dataset):
 
         """
         # Get record
-        record = self.manifest.records[idx]
-
-        # Finalize input data
-        input_data = load_input(
-            record=record,
-            target_dir=self.target_dir,
-            msa_dir=self.msa_dir,
-            constraints_dir=self.constraints_dir,
-            template_dir=self.template_dir,
-            extra_mols_dir=self.extra_mols_dir,
-            affinity=self.affinity,
-        )
-
-        # Tokenize structure
-        try:
-            tokenized = self.tokenizer.tokenize(input_data)
-        except Exception as e:  # noqa: BLE001
-            print(  # noqa: T201
-                f"Tokenizer failed on {record.id} with error {e}. Skipping."
-            )
-            return self.__getitem__(0)
-
-        if self.affinity:
-            try:
-                tokenized = self.cropper.crop(
-                    tokenized,
-                    max_tokens=256,
-                    max_atoms=2048,
-                )
-            except Exception as e:  # noqa: BLE001
-                print(f"Cropper failed on {record.id} with error {e}. Skipping.")  # noqa: T201
-                return self.__getitem__(0)
+        record = self.manifest.records[self.valid_indices[idx]]
+        input_data, tokenized = self._load_and_crop(record)
 
         # Load conformers
         try:
@@ -255,8 +283,7 @@ class PredictionDataset(torch.utils.data.Dataset):
             mol_names = mol_names - set(molecules.keys())
             molecules.update(load_molecules(self.mol_dir, mol_names))
         except Exception as e:  # noqa: BLE001
-            print(f"Molecule loading failed for {record.id} with error {e}. Skipping.")
-            return self.__getitem__(0)
+            raise self._record_error(record, "Molecule loading", e) from e
 
         # Inference specific options
         options = record.inference_options
@@ -295,8 +322,7 @@ class PredictionDataset(torch.utils.data.Dataset):
             import traceback
 
             traceback.print_exc()
-            print(f"Featurizer failed on {record.id} with error {e}. Skipping.")  # noqa: T201
-            return self.__getitem__(0)
+            raise self._record_error(record, "Featurizer", e) from e
 
         # Add record
         features["record"] = record
@@ -311,7 +337,7 @@ class PredictionDataset(torch.utils.data.Dataset):
             The length of the dataset.
 
         """
-        return len(self.manifest.records)
+        return len(self.valid_indices)
 
 
 class Boltz2InferenceDataModule(pl.LightningDataModule):
@@ -367,6 +393,22 @@ class Boltz2InferenceDataModule(pl.LightningDataModule):
         self.override_method = override_method
         self.affinity = affinity
         self.batch_size = batch_size
+        self._predict_dataset: Optional[PredictionDataset] = None
+
+    def predict_dataset(self) -> PredictionDataset:
+        if self._predict_dataset is None:
+            self._predict_dataset = PredictionDataset(
+                manifest=self.manifest,
+                target_dir=self.target_dir,
+                msa_dir=self.msa_dir,
+                mol_dir=self.mol_dir,
+                constraints_dir=self.constraints_dir,
+                template_dir=self.template_dir,
+                extra_mols_dir=self.extra_mols_dir,
+                override_method=self.override_method,
+                affinity=self.affinity,
+            )
+        return self._predict_dataset
 
     def predict_dataloader(self) -> DataLoader:
         """Get the training dataloader.
@@ -377,17 +419,7 @@ class Boltz2InferenceDataModule(pl.LightningDataModule):
             The training dataloader.
 
         """
-        dataset = PredictionDataset(
-            manifest=self.manifest,
-            target_dir=self.target_dir,
-            msa_dir=self.msa_dir,
-            mol_dir=self.mol_dir,
-            constraints_dir=self.constraints_dir,
-            template_dir=self.template_dir,
-            extra_mols_dir=self.extra_mols_dir,
-            override_method=self.override_method,
-            affinity=self.affinity,
-        )
+        dataset = self.predict_dataset()
         return DataLoader(
             dataset,
             batch_size=self.batch_size,

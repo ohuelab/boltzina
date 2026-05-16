@@ -290,6 +290,88 @@ class TestImportChain:
         from boltzina.engine import Boltzina  # noqa: F401
         assert Boltzina is not None
 
+    def test_ligand_prep_command_renames_obabel_unl(self, tmp_path):
+        from boltzina.engine import _build_ligand_prep_command
+
+        cmd = _build_ligand_prep_command(
+            ligand_chain_id="B",
+            pdb_file=tmp_path / "docked_ligand_1.pdb",
+            prep_file=tmp_path / "docked_ligand_1_prep.pdb",
+            input_ligand_name="MOL",
+            base_ligand_name="MOL",
+        )
+
+        assert f"pdb_chain -B {tmp_path / 'docked_ligand_1.pdb'}" in cmd
+        assert 'pdb_rplresname -"UNL":MOL' in cmd
+        assert f"> {tmp_path / 'docked_ligand_1_prep.pdb'}" in cmd
+
+    def test_ligand_prep_command_keeps_input_resname_rename(self, tmp_path):
+        from boltzina.engine import _build_ligand_prep_command
+
+        cmd = _build_ligand_prep_command(
+            ligand_chain_id="C",
+            pdb_file=tmp_path / "pose.pdb",
+            prep_file=tmp_path / "pose_prep.pdb",
+            input_ligand_name="LIG",
+            base_ligand_name="MOL",
+        )
+
+        assert 'pdb_rplresname -"LIG":MOL' in cmd
+        assert 'pdb_rplresname -"UNL":MOL' in cmd
+
+    def test_ligand_mol_update_respects_boltz_override(self, tmp_path):
+        from boltzina import engine
+
+        obj = engine.Boltzina.__new__(engine.Boltzina)
+        obj.output_dir = tmp_path
+        obj.fname = "target"
+        obj.pose_idxs = ["1"]
+
+        affinity_dir = tmp_path / "boltz_out" / "predictions" / "target_0_1"
+        affinity_dir.mkdir(parents=True)
+        (affinity_dir / "affinity_target_0_1.json").write_text("{}")
+
+        obj.boltz_override = False
+        assert obj._needs_ligand_mol_update(0) is False
+
+        obj.boltz_override = True
+        assert obj._needs_ligand_mol_update(0) is True
+
+    def test_engine_resolves_scripts_next_to_python(self, tmp_path):
+        from boltzina import tools
+
+        scripts_dir = tmp_path / "bin"
+        scripts_dir.mkdir()
+        python = scripts_dir / "python"
+        script = scripts_dir / "mk_prepare_receptor.py"
+        python.write_text("")
+        script.write_text("")
+        script.chmod(0o755)
+
+        with patch("boltzina.tools.shutil.which", return_value=None), \
+             patch.object(tools.sys, "executable", str(python)):
+            assert tools.resolve_executable("mk_prepare_receptor.py") == str(script)
+
+    def test_prepare_receptor_uses_read_pdb_for_pdb_inputs(self, tmp_path):
+        from boltzina import engine
+
+        receptor = tmp_path / "receptor_input.pdb"
+        receptor.write_text("ATOM\n")
+        obj = engine.Boltzina.__new__(engine.Boltzina)
+        obj.output_dir = tmp_path
+        obj.receptor_pdb = receptor
+        obj.vina_override = True
+
+        def fake_run(cmd, check, **kwargs):
+            assert cmd[1] == "--read_pdb"
+            assert cmd[2] == str(receptor)
+            assert "env" in kwargs
+            (tmp_path / "receptor.pdbqt").write_text("PDBQT\n")
+
+        with patch("boltzina.engine.resolve_executable", return_value="/bin/mk_prepare_receptor.py"), \
+             patch("boltzina.engine.subprocess.run", side_effect=fake_run):
+            assert obj._prepare_receptor() == tmp_path / "receptor.pdbqt"
+
     def test_boltzina_version_accessible(self):
         import boltzina
         assert hasattr(boltzina, "__version__"), "boltzina.__version__ not found"

@@ -127,6 +127,11 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
         batch_size=batch_size,
     )
 
+    dataset = data_module.predict_dataset()
+    if len(dataset) == 0:
+        print("No valid affinity records to score after prefiltering.")
+        return []
+
     trainer = Trainer(
         default_root_dir=out_dir,
         strategy=strategy,
@@ -140,4 +145,3 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
         datamodule=data_module,
         return_predictions=False,
     )
-

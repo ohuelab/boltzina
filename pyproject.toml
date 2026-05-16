@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boltzina"
-version = "1.0.0"
+version = "1.0.1"
 description = "Efficient and accurate virtual screening via docking-guided binding prediction with Boltz-2"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -46,9 +46,18 @@ Changelog = "https://github.com/ohuelab/boltzina/blob/main/CHANGELOG.md"
 [project.scripts]
 boltzina = "boltzina.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["boltzina*"]
+[tool.setuptools]
+packages = [
+    "boltzina",
+    "boltzina.affinity",
+    "boltzina.data",
+    "boltzina.data.module",
+    "boltzina.data.parse",
+    "boltzina.data.write",
+    "boltzina.docking",
+    "boltzina.model",
+    "boltzina.model.models",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -15,11 +15,21 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import sys
+import types
 
+import click
 import pytest
 import yaml
 
-from boltzina.boltz_setup import generate_boltz_yaml, parse_yaml_ligand_chain
+from boltzina.boltz_setup import (
+    _prepare_yaml_for_boltz_run,
+    extract_receptor_pdb,
+    generate_boltz_yaml,
+    parse_yaml_ligand_chain,
+    run_boltz_predict,
+)
 
 CDK2_SEQUENCE = (
     "MENFQKVEKIGEGTYGVVYKARNKLTGEVVALKKIRLDTETEGVPSTAIREISLLKELNHPNIVKLLDVIH"
@@ -81,6 +91,27 @@ class TestGenerateBoltzYamlSingleChain:
             data = yaml.safe_load(f)
         protein_entries = [s for s in data["sequences"] if "protein" in s]
         assert protein_entries[0]["protein"]["sequence"] == SHORT_SEQ.upper()
+
+    def test_default_yaml_marks_msa_empty(self, tmp_path):
+        out = tmp_path / "test.yaml"
+        generate_boltz_yaml(sequences=[SHORT_SEQ], representative_smiles=ROSCOVITINE_SMILES, output_path=out)
+        with open(out) as f:
+            data = yaml.safe_load(f)
+        protein_entries = [s for s in data["sequences"] if "protein" in s]
+        assert protein_entries[0]["protein"]["msa"] == "empty"
+
+    def test_use_msa_server_leaves_msa_unspecified(self, tmp_path):
+        out = tmp_path / "test.yaml"
+        generate_boltz_yaml(
+            sequences=[SHORT_SEQ],
+            representative_smiles=ROSCOVITINE_SMILES,
+            output_path=out,
+            use_msa_server=True,
+        )
+        with open(out) as f:
+            data = yaml.safe_load(f)
+        protein_entries = [s for s in data["sequences"] if "protein" in s]
+        assert "msa" not in protein_entries[0]["protein"]
 
     def test_ligand_chain_id_is_b(self, tmp_path):
         out = tmp_path / "test.yaml"
@@ -270,3 +301,114 @@ properties:
             smiles, chain_id = parse_yaml_ligand_chain(yaml_path)
             assert chain_id is not None
             assert smiles is not None
+
+
+class TestRunBoltzPredict:
+    """Tests for the Boltz predict wrapper."""
+
+    def test_calls_click_callback_when_predict_is_click_command(self, tmp_path, monkeypatch):
+        calls = {}
+
+        def fake_predict_callback(**kwargs):
+            calls.update(kwargs)
+            work_dir = Path(kwargs["out_dir"]) / "boltz_results_input"
+            work_dir.mkdir(parents=True)
+
+        fake_boltz = types.ModuleType("boltz")
+        fake_boltz_main = types.ModuleType("boltz.main")
+        fake_boltz_main.predict = click.Command(
+            "predict",
+            callback=fake_predict_callback,
+        )
+        monkeypatch.setitem(sys.modules, "boltz", fake_boltz)
+        monkeypatch.setitem(sys.modules, "boltz.main", fake_boltz_main)
+
+        yaml_path = tmp_path / "input.yaml"
+        yaml_path.write_text("version: 1\n")
+        out_dir = tmp_path / "out"
+
+        work_dir = run_boltz_predict(
+            yaml_path=yaml_path,
+            out_dir=out_dir,
+            cache=tmp_path / "cache",
+            seed=123,
+            no_kernels=True,
+        )
+
+        from rdkit.Chem import AllChem
+
+        assert work_dir == out_dir / "boltz_results_input"
+        assert calls["data"] == str(yaml_path)
+        assert calls["out_dir"] == str(out_dir)
+        assert calls["cache"] == str(tmp_path / "cache")
+        assert calls["seed"] == 123
+        assert calls["no_kernels"] is True
+        assert calls["model"] == "boltz2"
+        assert hasattr(AllChem, "Descriptors")
+
+
+class TestPrepareYamlForBoltzRun:
+    """Tests for YAML preparation before invoking Boltz."""
+
+    def test_adds_empty_msa_when_server_disabled(self, tmp_path):
+        src = tmp_path / "input.yaml"
+        dest = tmp_path / "work" / "input.yaml"
+        src.write_text(
+            "version: 1\n"
+            "sequences:\n"
+            "  - protein:\n"
+            "      id: A\n"
+            "      sequence: MENFQKV\n"
+            "  - ligand:\n"
+            "      id: B\n"
+            "      smiles: CCO\n"
+            "properties:\n"
+            "  - affinity:\n"
+            "      binder: B\n"
+        )
+
+        _prepare_yaml_for_boltz_run(src, dest, use_msa_server=False)
+
+        with open(dest) as f:
+            data = yaml.safe_load(f)
+        protein_entries = [s for s in data["sequences"] if "protein" in s]
+        assert protein_entries[0]["protein"]["msa"] == "empty"
+
+    def test_preserves_missing_msa_when_server_enabled(self, tmp_path):
+        src = tmp_path / "input.yaml"
+        dest = tmp_path / "work" / "input.yaml"
+        src.write_text(
+            "version: 1\n"
+            "sequences:\n"
+            "  - protein:\n"
+            "      id: A\n"
+            "      sequence: MENFQKV\n"
+            "  - ligand:\n"
+            "      id: B\n"
+            "      smiles: CCO\n"
+        )
+
+        _prepare_yaml_for_boltz_run(src, dest, use_msa_server=True)
+
+        with open(dest) as f:
+            data = yaml.safe_load(f)
+        protein_entries = [s for s in data["sequences"] if "protein" in s]
+        assert "msa" not in protein_entries[0]["protein"]
+
+
+class TestExtractReceptorPdb:
+    """Tests for predicted receptor extraction."""
+
+    def test_converts_cif_when_preexisting_protein_pdb_absent(self, tmp_path, sample_cdk2_dir):
+        fname = "1ckp_cdk2"
+        pred_dir = tmp_path / "predictions" / fname
+        pred_dir.mkdir(parents=True)
+        source_cif = sample_cdk2_dir / "boltz_results_base" / "predictions" / fname / f"{fname}_model_0.cif"
+        shutil.copy2(source_cif, pred_dir / f"{fname}_model_0.cif")
+
+        receptor_pdb = extract_receptor_pdb(tmp_path, fname)
+
+        assert receptor_pdb == pred_dir / f"{fname}_model_0_protein.pdb"
+        text = receptor_pdb.read_text()
+        assert text.startswith("ATOM")
+        assert "HETATM" not in text

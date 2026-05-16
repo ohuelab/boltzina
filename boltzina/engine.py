@@ -18,7 +18,64 @@ Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 
 from boltzina.data.parse.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
+from boltzina.config import get_vina_path, get_maxit_path
+from boltzina.tools import resolve_executable, runtime_env
 from boltz.main import get_cache_path
+
+
+def _configured_tool(getter) -> Optional[str]:
+    try:
+        return getter()
+    except RuntimeError:
+        return None
+
+
+def _resolve_vina() -> str:
+    return resolve_executable(
+        "vina",
+        env_var="BOLTZINA_VINA_PATH",
+        config_path=_configured_tool(get_vina_path),
+        install_hint="Install AutoDock Vina or run `boltzina setup --install-vina`.",
+    )
+
+
+def _resolve_maxit() -> str:
+    return resolve_executable(
+        "maxit",
+        env_var="BOLTZINA_MAXIT_PATH",
+        config_path=_configured_tool(get_maxit_path),
+        install_hint="Install MAXIT or run `boltzina setup --install-maxit`.",
+    )
+
+
+def _resolve_obabel() -> str:
+    return resolve_executable(
+        "obabel",
+        env_var="BOLTZINA_OBABEL_PATH",
+        install_hint="Install Open Babel or ensure the active environment contains obabel.",
+    )
+
+
+def _build_ligand_prep_command(
+    ligand_chain_id: str,
+    pdb_file: Path,
+    prep_file: Path,
+    input_ligand_name: str,
+    base_ligand_name: str,
+) -> str:
+    """Build the pdb-tools command that normalizes docked ligand chain/resname."""
+    cmd = f"pdb_chain -{ligand_chain_id} {pdb_file}"
+    replacements = []
+    if input_ligand_name != base_ligand_name:
+        replacements.append(input_ligand_name)
+    if "UNL" != base_ligand_name:
+        replacements.append("UNL")
+
+    for source in dict.fromkeys(replacements):
+        cmd += f" | pdb_rplresname -\"{source}\":{base_ligand_name}"
+
+    cmd += f" | pdb_tidy > {prep_file}"
+    return cmd
 
 
 # ---------------------------------------------------------------------------
@@ -50,24 +107,27 @@ def _process_pose_worker(args):
         return True
 
     try:
-        if input_ligand_name != base_ligand_name:
-            cmd1 = (f"pdb_chain -{ligand_chain_id} {pdb_file} | "
-                    f"pdb_rplresname -\"{input_ligand_name}\":{base_ligand_name} | "
-                    f"pdb_tidy > {prep_file}")
-        else:
-            cmd1 = f"pdb_chain -{ligand_chain_id} {pdb_file} | pdb_tidy > {prep_file}"
-        subprocess.run(cmd1, shell=True, check=True)
+        cmd1 = _build_ligand_prep_command(
+            ligand_chain_id=ligand_chain_id,
+            pdb_file=pdb_file,
+            prep_file=prep_file,
+            input_ligand_name=input_ligand_name,
+            base_ligand_name=base_ligand_name,
+        )
+        subprocess.run(cmd1, shell=True, check=True, env=runtime_env())
 
         cmd2 = f"pdb_merge {receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
-        subprocess.run(cmd2, shell=True, check=True)
+        subprocess.run(cmd2, shell=True, check=True, env=runtime_env())
+
+        maxit = _resolve_maxit()
 
         subprocess.run(
-            ["maxit", "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"],
-            check=True, capture_output=True,
+            [maxit, "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"],
+            check=True, capture_output=True, env=runtime_env(),
         )
         subprocess.run(
-            ["maxit", "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"],
-            check=True, capture_output=True,
+            [maxit, "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"],
+            check=True, capture_output=True, env=runtime_env(),
         )
         return True
     except Exception as e:
@@ -226,22 +286,23 @@ class Boltzina:
             print(f"Skipping receptor preparation for {receptor_pdbqt} because it already exists")
             return receptor_pdbqt
 
-        mk_prepare = shutil.which("mk_prepare_receptor.py") or shutil.which("mk_prepare_receptor")
-        if mk_prepare is None:
-            raise RuntimeError(
-                "mk_prepare_receptor.py not found. Install Meeko (e.g., `pip install meeko`) "
-                "and ensure your PATH includes the script."
-            )
+        mk_prepare = resolve_executable(
+            "mk_prepare_receptor.py",
+            "mk_prepare_receptor",
+            env_var="BOLTZINA_MK_PREPARE_RECEPTOR_PATH",
+            install_hint="Install Meeko or ensure the active environment contains mk_prepare_receptor.py.",
+        )
 
         out_base = str(self.output_dir / "receptor")
 
+        read_option = "--read_pdb" if self.receptor_pdb.suffix.lower() == ".pdb" else "-i"
         cmd = [
             mk_prepare,
-            "-i", str(self.receptor_pdb),
+            read_option, str(self.receptor_pdb),
             "-o", out_base,
             "-p",
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=runtime_env())
 
         produced = Path(out_base + ".pdbqt")
         if not produced.exists():
@@ -285,6 +346,22 @@ class Boltzina:
     def _get_fname(self) -> str:
         return self.manifest["records"][0]["id"]
 
+    def _needs_ligand_mol_update(self, ligand_idx: int) -> bool:
+        if self.boltz_override:
+            return True
+        for pose_idx in self.pose_idxs:
+            fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
+            affinity_file = (
+                self.output_dir
+                / "boltz_out"
+                / "predictions"
+                / fname
+                / f"affinity_{fname}.json"
+            )
+            if not affinity_file.exists():
+                return True
+        return False
+
     def run(self, ligand_files: List[str]) -> None:
         # Resolve fname lazily here so work_dir can be set after __init__
         if self.fname is None:
@@ -323,13 +400,7 @@ class Boltzina:
                 self.mol_dict = pickle.load(f)
 
         for idx, ligand_file in enumerate(ligand_files):
-            all_exist = True
-            for pose_idx in self.pose_idxs:
-                fname = f"{self.fname}_{idx}_{pose_idx}"
-                if not (self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json").exists():
-                    all_exist = False
-                    break
-            if not all_exist:
+            if self._needs_ligand_mol_update(idx):
                 ligand_output_dir = self.output_dir / "out" / str(idx)
                 self._update_ccd_for_ligand(ligand_output_dir, Path(ligand_file))
 
@@ -654,9 +725,10 @@ class Boltzina:
     def _convert_to_pdbqt(self, input_file: Path, output_file: Path) -> None:
         if output_file.exists() and not self.vina_override:
             return
-        cmd = ["obabel", str(input_file), "-O", str(output_file)]
+        obabel = _resolve_obabel()
+        cmd = [obabel, str(input_file), "-O", str(output_file)]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, env=runtime_env())
             if not output_file.exists():
                 raise RuntimeError(f"Failed to create PDBQT file: {output_file}")
         except subprocess.CalledProcessError as e:
@@ -668,8 +740,9 @@ class Boltzina:
         if output_pdbqt.exists() and not self.vina_override:
             print(f"Skipping Vina docking for {output_pdbqt} because it already exists")
             return
+        vina = _resolve_vina()
         cmd = [
-            "vina",
+            vina,
             "--receptor", str(self.receptor_pdbqt),
             "--ligand", str(ligand_pdbqt),
             "--out", str(output_pdbqt),
@@ -677,7 +750,7 @@ class Boltzina:
             "--cpu", str(self.vina_cpu),
         ]
         try:
-            subprocess.run(cmd, check=True, timeout=self.timeout)
+            subprocess.run(cmd, check=True, timeout=self.timeout, env=runtime_env())
             if not output_pdbqt.exists():
                 raise RuntimeError(f"Vina failed to create output file: {output_pdbqt}")
         except subprocess.TimeoutExpired:
@@ -700,12 +773,13 @@ class Boltzina:
             return
 
         # Convert PDBQT to PDB and split into multiple files
+        obabel = _resolve_obabel()
         cmd = [
-            "obabel", str(docked_pdbqt), "-m", "-O",
+            obabel, str(docked_pdbqt), "-m", "-O",
             str(docked_ligands_dir / "docked_ligand_.pdb")
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, env=runtime_env())
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to convert docked PDBQT to PDB files: {e.stderr}")
         except Exception as e:
@@ -732,37 +806,40 @@ class Boltzina:
             return
         # Process with pdb_chain and pdb_rplresname
         try:
-            if self.input_ligand_name != self.base_ligand_name:
-                cmd1 = f"pdb_chain -{self.ligand_chain_id} {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
-                subprocess.run(cmd1, shell=True, check=True)
-            else:
-                cmd1 = f"pdb_chain -{self.ligand_chain_id} {pdb_file} | pdb_tidy > {prep_file}"
-                subprocess.run(cmd1, shell=True, check=True)
+            cmd1 = _build_ligand_prep_command(
+                ligand_chain_id=self.ligand_chain_id,
+                pdb_file=pdb_file,
+                prep_file=prep_file,
+                input_ligand_name=self.input_ligand_name,
+                base_ligand_name=self.base_ligand_name,
+            )
+            subprocess.run(cmd1, shell=True, check=True, env=runtime_env())
 
             if not prep_file.exists():
                 raise RuntimeError(f"Failed to create prep file: {prep_file}")
 
             # Merge with receptor
             cmd2 = f"pdb_merge {self.receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
-            subprocess.run(cmd2, shell=True, check=True)
+            subprocess.run(cmd2, shell=True, check=True, env=runtime_env())
 
             if not complex_file.exists():
                 raise RuntimeError(f"Failed to create complex file: {complex_file}")
 
+            maxit = _resolve_maxit()
             # Convert to CIF
             cmd3 = [
-                "maxit", "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"
+                maxit, "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"
             ]
-            subprocess.run(cmd3, check=True)
+            subprocess.run(cmd3, check=True, env=runtime_env())
 
             if not complex_cif.exists():
                 raise RuntimeError(f"Failed to create CIF file: {complex_cif}")
 
             # Fix CIF
             cmd4 = [
-                "maxit", "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"
+                maxit, "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"
             ]
-            subprocess.run(cmd4, check=True)
+            subprocess.run(cmd4, check=True, env=runtime_env())
 
             if not complex_fix_cif.exists():
                 raise RuntimeError(f"Failed to create fixed CIF file: {complex_fix_cif}")
@@ -1125,13 +1202,7 @@ class Boltzina:
         for ligand_idx, pdb_file in enumerate(self.ligand_files):
             ligand_path = Path(pdb_file)
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
-            all_exist = True
-            for pose_idx in self.pose_idxs:
-                fname = f"{self.fname}_{ligand_idx}_{pose_idx}"
-                if not (self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json").exists():
-                    all_exist = False
-                    break
-            if not all_exist:
+            if self._needs_ligand_mol_update(ligand_idx):
                 ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
                 self._update_ccd_for_ligand(ligand_output_dir, ligand_path)
 
