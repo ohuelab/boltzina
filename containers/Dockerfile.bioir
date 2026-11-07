@@ -1,0 +1,23 @@
+FROM python:3.12-slim-bookworm
+
+WORKDIR /opt/boltzina
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY LICENSES ./LICENSES
+COPY boltzina ./boltzina
+COPY environments/bioir/pyproject.toml environments/bioir/uv.lock ./environments/bioir/
+COPY containers/install-bioir.sh ./containers/install-bioir.sh
+RUN sh containers/install-bioir.sh
+
+ENV PATH="/opt/boltzina/environments/bioir/.venv/bin:${PATH}" \
+    BOLTZINA_VINA_PATH="/opt/boltzina-tools/bin/vina" \
+    BOLTZINA_MAXIT_PATH="/opt/boltzina-tools/maxit-v11.300-prod-src/bin/maxit" \
+    RCSBROOT="/opt/boltzina-tools/maxit-v11.300-prod-src" \
+    BOLTZ_CACHE="/cache/boltz" \
+    XDG_CACHE_HOME="/cache/boltz/runtime" \
+    NUMBA_CACHE_DIR="/cache/boltz/runtime/numba" \
+    TRITON_CACHE_DIR="/cache/boltz/runtime/triton" \
+    CUEQ_TRITON_CACHE_DIR="/cache/boltz/runtime/cuequivariance" \
+    CUDA_CACHE_PATH="/cache/boltz/runtime/cuda"
+WORKDIR /data
+ENTRYPOINT ["boltzina"]
+CMD ["--help"]

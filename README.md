@@ -20,6 +20,13 @@ uv sync
 boltzina setup --all
 ```
 
+For accelerated fixed-pose affinity scoring, use `--scoring-backend bioir`.
+See [BioIR scoring](docs/bioir.md) for the Python environment and Docker/Apptainer
+installation instructions. The default scoring backend is `boltz`.
+
+The BioIR backend can score fixed poses **about 2× faster** than Boltzina's
+standard backend.
+
 For Uni-Dock2 (GPU-accelerated docking, requires [pixi](https://pixi.sh) and CUDA 12):
 ```bash
 # Clone Uni-Dock2 and build using the provided pixi.toml
@@ -180,6 +187,7 @@ boltzina run sample/CDK2/ligands.smi \
 |--------|---------|-------------|
 | `--output-dir` / `-o` | `./boltzina_results` | Output directory |
 | `--batch-size` | `1` | Boltz-2 scoring batch size |
+| `--scoring-backend` | `boltz` | Fixed-pose scoring: `boltz` or `bioir` |
 | `--seed` | — | Random seed |
 | `--vina-override` | off | Rerun Vina even if results exist |
 | `--boltz-override` | off | Rerun Boltz-2 scoring even if results exist |
@@ -232,7 +240,14 @@ See `sample/CDK2/config.json` for the configuration file format.
 
 ## Benchmark Dataset
 
-The MF-PCBA benchmark dataset used in the paper is included in `mf-pcba_test.zip`.
+The MF-PCBA benchmark dataset used in the paper is distributed as a release asset
+(not tracked in the repository, to keep clones small):
+
+```bash
+curl -LO https://github.com/ohuelab/boltzina/releases/download/v1.0.1/mf-pcba_test.zip
+unzip mf-pcba_test.zip
+```
+
 See the paper for details on the evaluation protocol.
 
 ---

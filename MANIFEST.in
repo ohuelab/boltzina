@@ -8,3 +8,11 @@ prune local
 prune .venv
 exclude mf-pcba_test.zip
 exclude maxit.log
+
+include NOTICE
+include docs/bioir.md
+include containers/Dockerfile.bioir
+include containers/bioir.def
+include containers/install-bioir.sh
+include environments/bioir/pyproject.toml
+include environments/bioir/uv.lock

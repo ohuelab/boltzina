@@ -316,9 +316,19 @@ def _convert_cif_to_protein_pdb(cif_path: Path, output_pdb: Path) -> None:
         env=runtime_env(),
     )
     if result.returncode != 0:
-        raise RuntimeError(f"pdb_fromcif failed: {result.stderr}")
+        # Remove non-polymer records before PDB conversion; ligand residue names
+        # can exceed the PDB format's three-character limit.
+        import gemmi
 
-    tmp_pdb.write_text(result.stdout)
+        structure = gemmi.read_structure(str(cif_path))
+        for model in structure:
+            for chain in model:
+                for index in reversed(range(len(chain))):
+                    if chain[index].het_flag != "A":
+                        del chain[index]
+        structure.write_pdb(str(tmp_pdb))
+    else:
+        tmp_pdb.write_text(result.stdout)
     _extract_protein_atoms(tmp_pdb, output_pdb)
     tmp_pdb.unlink(missing_ok=True)
 

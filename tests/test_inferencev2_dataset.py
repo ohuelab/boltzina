@@ -63,3 +63,34 @@ def test_dataset_reports_record_id_without_recursive_fallback(monkeypatch, tmp_p
 
     with pytest.raises(RuntimeError, match="Input loading failed on rec0"):
         dataset[0]
+
+
+def test_msa_cache_is_immutable_and_invalidates_changed_file(monkeypatch, tmp_path):
+    from dataclasses import dataclass
+    import numpy as np
+
+    @dataclass
+    class ParsedMSA:
+        sequences: np.ndarray
+
+    path = tmp_path / "msa.npz"
+    path.write_bytes(b"one")
+    calls = []
+
+    def load(path):
+        calls.append(path)
+        return ParsedMSA(np.arange(len(path.read_bytes())))
+
+    monkeypatch.setattr(inferencev2.MSA, "load", load)
+    inferencev2._load_immutable_msa.cache_clear()
+    try:
+        first = inferencev2.load_cached_msa(path)
+        assert inferencev2.load_cached_msa(path) is first
+        with pytest.raises(ValueError, match="read-only"):
+            first.sequences[0] = 9
+        path.write_bytes(b"replacement")
+        second = inferencev2.load_cached_msa(path)
+        assert second is not first
+        assert len(calls) == 2
+    finally:
+        inferencev2._load_immutable_msa.cache_clear()

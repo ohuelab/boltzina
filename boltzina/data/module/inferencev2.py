@@ -1,4 +1,6 @@
 import pickle
+import dataclasses
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +24,23 @@ from boltz.data.types import (
     ResidueConstraints,
     StructureV2,
 )
+
+
+@lru_cache(maxsize=16)
+def _load_immutable_msa(path: Path, mtime_ns: int, size: int) -> MSA:
+    """Cache parsed MSA data; stochastic feature generation remains per record."""
+    msa = MSA.load(path)
+    for field in dataclasses.fields(msa):
+        value = getattr(msa, field.name)
+        if isinstance(value, np.ndarray):
+            value.setflags(write=False)
+    return msa
+
+
+def load_cached_msa(path: Path) -> MSA:
+    path = path.resolve()
+    stat = path.stat()
+    return _load_immutable_msa(path, stat.st_mtime_ns, stat.st_size)
 
 
 def load_input(
@@ -71,7 +90,7 @@ def load_input(
         msa_id = chain.msa_id
         # Load the MSA for this chain, if any
         if msa_id != -1:
-            msa = MSA.load(msa_dir / f"{msa_id}.npz")
+            msa = load_cached_msa(msa_dir / f"{msa_id}.npz")
             msas[chain.chain_id] = msa
 
     # Load templates

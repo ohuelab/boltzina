@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boltzina"
-version = "1.0.1"
+version = "1.1.0"
 description = "Efficient and accurate virtual screening via docking-guided binding prediction with Boltz-2"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSES/*.txt"]
 authors = [
     { name = "Kairi Furui", email = "furui@li.comp.isct.ac.jp" },
 ]
@@ -30,6 +30,10 @@ dependencies = [
     "openbabel-wheel>=3.1.1.22",
     "pdb-tools>=2.5.0",
     "triton==3.3.0",
+    "cuequivariance==0.9.1",
+    "cuequivariance-torch==0.9.1",
+    "cuequivariance-ops-cu12==0.9.1",
+    "cuequivariance-ops-torch-cu12==0.9.1",
     "meeko>=0.6.1",
     "click>=8.0",
     "tomli>=2.0; python_version < '3.11'",

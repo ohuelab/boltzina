@@ -117,6 +117,10 @@ def main():
                  help="Apply molecular weight correction to affinity")
 
 # Output / misc group
+@optgroup.group("Affinity scoring")
+@optgroup.option("--scoring-backend", default="boltz", show_default=True,
+                 type=click.Choice(["boltz", "bioir"]),
+                 help="Fixed-pose affinity scoring implementation")
 @optgroup.group("Output")
 @optgroup.option("--output-dir", "-o", default="./boltzina_results", show_default=True,
                  help="Output directory")
@@ -145,6 +149,7 @@ def run_cmd(
     step_scale, max_parallel_samples, subsample_msa, num_subsampled_msa,
     use_potentials, max_msa_seqs, no_kernels, affinity_mw_correction,
     output_dir, batch_size, seed, keep_intermediate_files, float32_matmul_precision,
+    scoring_backend,
     vina_override, boltz_override, ligand_prefix,
 ):
     """
@@ -220,6 +225,7 @@ def run_cmd(
         grid_size=grid_size,
         ligand_chain_id=ligand_chain_id,
         docking_engine=docking_engine,
+        scoring_backend=scoring_backend,
         num_workers=num_workers,
         vina_cpu=vina_cpu,
         batch_size=batch_size,
@@ -251,8 +257,11 @@ def run_cmd(
     )
 
     runner = BoltzinaRunner(cfg)
-    df = runner.run()
-    click.echo(f"\nDone. Results saved to {Path(output_dir) / 'results.csv'}")
+    try:
+        df = runner.run()
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"\nDone. Results saved to {Path(output_dir) / 'boltzina_results.csv'}")
     if not df.empty:
         best = df.loc[df["affinity_pred_value"].idxmin()] if "affinity_pred_value" in df.columns else None
         if best is not None:

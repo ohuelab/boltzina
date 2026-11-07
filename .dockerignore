@@ -1,0 +1,17 @@
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!NOTICE
+!LICENSES/
+!LICENSES/**
+!boltzina/
+!boltzina/**
+!environments/
+!environments/bioir/
+!environments/bioir/pyproject.toml
+!environments/bioir/uv.lock
+!containers/
+!containers/install-bioir.sh
+**/__pycache__
+**/*.pyc

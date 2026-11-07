@@ -202,12 +202,16 @@ cuda = [
 
 [[package]]
 name = "boltzina"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boltz", extra = ["cuda"] },
     { name = "click" },
     { name = "click-option-group" },
+    { name = "cuequivariance" },
+    { name = "cuequivariance-ops-cu12" },
+    { name = "cuequivariance-ops-torch-cu12" },
+    { name = "cuequivariance-torch" },
     { name = "meeko" },
     { name = "openbabel-wheel" },
     { name = "pdb-tools" },
@@ -226,6 +230,10 @@ requires-dist = [
     { name = "boltz", extras = ["cuda"], specifier = ">=2.2.0" },
     { name = "click", specifier = ">=8.0" },
     { name = "click-option-group", specifier = ">=0.5.9" },
+    { name = "cuequivariance", specifier = "==0.9.1" },
+    { name = "cuequivariance-ops-cu12", specifier = "==0.9.1" },
+    { name = "cuequivariance-ops-torch-cu12", specifier = "==0.9.1" },
+    { name = "cuequivariance-torch", specifier = "==0.9.1" },
     { name = "meeko", specifier = ">=0.6.1" },
     { name = "openbabel-wheel", specifier = ">=3.1.1.22" },
     { name = "pdb-tools", specifier = ">=2.5.0" },

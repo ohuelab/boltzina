@@ -90,6 +90,7 @@ class RunnerConfig:
     affinity_mw_correction: bool = False
 
     # --- Boltzina scoring params ---
+    scoring_backend: str = "boltz"
     use_kernels: bool = True
     seed: Optional[int] = None
     keep_intermediate_files: bool = False
@@ -132,6 +133,11 @@ class BoltzinaRunner:
                 "  --yaml                        (structure prediction from YAML)\n"
                 "  --work-dir                    (rescore from precomputed Boltz-2 results)"
             )
+
+        from boltzina.affinity.backends import check_cached_backend, validate_scoring_backend
+
+        validate_scoring_backend(cfg.scoring_backend, use_kernels=cfg.use_kernels)
+        check_cached_backend(cfg.output_dir, cfg.scoring_backend, override=cfg.boltz_override)
 
         if cfg.yaml_input is not None:
             self._run_predict_yaml()
@@ -401,6 +407,7 @@ class BoltzinaRunner:
             ligand_chain_id=ligand_chain_id,
             prepared_mols_file=str(pkl_path),
             docking_engine=cfg.docking_engine,
+            scoring_backend=cfg.scoring_backend,
             unidock2_config=cfg.unidock2_config,
         )
 

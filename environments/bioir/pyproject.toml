@@ -1,0 +1,30 @@
+[project]
+name = "boltzina-bioir-runtime"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "boltzina",
+    "boltz==2.2.1",
+    "bionemo-ir==0.2.1",
+    "torch==2.11.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "build>=1.2"]
+
+[tool.uv.sources]
+boltzina = { path = "../..", editable = true }
+
+[tool.uv]
+# Use a single CUDA runtime and the BioIR-compatible versions of shared libraries.
+environments = ["sys_platform == 'linux'"]
+override-dependencies = [
+    "cuequivariance==0.13.0",
+    "cuequivariance-torch==0.13.0",
+    "cuequivariance-ops-cu12; sys_platform == 'never'",
+    "cuequivariance-ops-torch-cu12; sys_platform == 'never'",
+    "triton==3.7.0",
+    "biopython==1.87",
+    "modelcif==1.6",
+    "gemmi==0.7.5",
+]

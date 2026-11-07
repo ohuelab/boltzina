@@ -1,0 +1,7 @@
+Boltzina is licensed under the MIT License (see LICENSE).
+
+boltzina/affinity/bioir_model.py is licensed under the Apache License 2.0
+and retains its NVIDIA copyright notice. See LICENSES/Apache-2.0.txt.
+
+BioNeMo Inference Runtime is an external dependency with its own license
+and third-party notices.

@@ -9,10 +9,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv build
+      - name: Prepare release notes from the changelog
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+
+          version = os.environ["RELEASE_TAG"].removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text()
+          section = re.search(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              changelog, re.MULTILINE | re.DOTALL,
+          )
+          if section is None or not section.group(1).strip():
+              raise SystemExit(f"Missing release notes for {version} in CHANGELOG.md")
+          Path("release-notes.md").write_text(section.group(1).strip() + "\n")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
 
   publish:
     needs: build
@@ -26,8 +49,13 @@ jobs:
         with:
           name: dist
           path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
       - uses: pypa/gh-action-pypi-publish@release/v1
       - uses: softprops/action-gh-release@v2
         with:
+          name: Boltzina ${{ github.ref_name }}
+          body_path: release-notes.md
           files: dist/*
-          generate_release_notes: true
+          generate_release_notes: false

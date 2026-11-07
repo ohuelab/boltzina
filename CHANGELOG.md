@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-11-07
+
+Boltzina 1.1.0 adds accelerated fixed-pose affinity scoring with NVIDIA BioNeMo
+Inference Runtime (BioIR). The BioIR backend can score fixed poses **about 2×
+faster** than Boltzina's standard backend.
+
+Select it with `--scoring-backend bioir` using the supplied Python environment or
+Docker/Apptainer recipes. See the [BioIR installation and usage guide](https://github.com/ohuelab/boltzina/blob/v1.1.0/docs/bioir.md).
+
+### Added
+- Optional BioIR backend for accelerated fixed-pose affinity scoring (`--scoring-backend bioir`). The default backend remains `boltz`.
+- A reproducible BioIR Python environment and Docker/Apptainer recipes with Vina, MAXIT, and Open Babel.
+
+### Changed
+- Reuse parsed protein MSAs across ligands to reduce repeated data loading.
+
+### Fixed
+- Pin compatible cuEquivariance packages for the standard Boltz environment.
+- Clear previous affinity results and runtime metadata when explicitly switching scoring backends with `--boltz-override`.
+- Handle receptor CIF-to-PDB conversion when ligand component names exceed the PDB format limit.
+- Report the correct `boltzina_results.csv` path after a successful run.
+
 ## [1.0.1] - 2026-05-16
 
 ### Fixed

@@ -221,7 +221,19 @@ class Boltzina:
         docking_engine: str = "vina",
         unidock2_config: Optional[dict] = None,
         mask_ligand_coords: bool = False,
+        scoring_backend: str = "boltz",
     ):
+        from boltzina.affinity.backends import check_cached_backend, validate_scoring_backend
+
+        validate_scoring_backend(scoring_backend, use_kernels=use_kernels)
+        check_cached_backend(Path(output_dir), scoring_backend, override=boltz_override)
+        if scoring_backend == "bioir" and (
+            not skip_run_structure or not run_trunk_and_structure
+            or any(value is not None for value in
+                   (pairformer_args, msa_args, steering_args, diffusion_process_args))
+        ):
+            raise ValueError("BioIR scoring requires the standard fixed-pose trunk configuration.")
+        self.scoring_backend = scoring_backend
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
         self.config = Path(config) if config else None
@@ -953,10 +965,39 @@ class Boltzina:
 
     def _score_poses(self):
         """Score a single pose"""
+        from boltzina.affinity.backends import write_backend_metadata
+
         work_dir = self.work_dir
         output_dir = self.output_dir / "boltz_out" / "predictions"
         extra_mols_dir = self.output_dir / "boltz_out" / "processed" / "mols"
         constraints_dir = self.output_dir / "boltz_out" / "processed" / "constraints"
+        manifest_path = self.output_dir / "boltz_out/processed/manifest.json"
+        if not json.loads(manifest_path.read_text())["records"]:
+            print("No new affinity records to score.")
+            return
+        write_backend_metadata(
+            self.output_dir, self.scoring_backend, state="running",
+            batch_size=self.batch_size, seed=self.seed,
+        )
+        if self.boltz_override:
+            for previous_score in output_dir.glob("*/affinity_*.json"):
+                previous_score.unlink()
+            (output_dir.parent / "scoring_metadata.json").unlink(missing_ok=True)
+        if self.scoring_backend == "bioir":
+            from boltzina.affinity.bioir import predict_bioir_affinity
+
+            predict_bioir_affinity(
+                work_dir, output_dir=output_dir, constraints_dir=constraints_dir,
+                extra_mols_dir=extra_mols_dir,
+                manifest_path=manifest_path,
+                num_workers=4, batch_size=self.batch_size, seed=self.seed,
+                recycling_steps=(self.predict_affinity_args or {}).get("recycling_steps", 5),
+            )
+            write_backend_metadata(
+                self.output_dir, self.scoring_backend, state="complete",
+                batch_size=self.batch_size, seed=self.seed,
+            )
+            return
         # Run Boltzina scoring directly with predict_affinity
         self.boltz_model = load_boltz2_model(skip_run_structure = self.skip_run_structure, use_kernels=self.use_kernels, run_trunk_and_structure=self.run_trunk_and_structure, predict_affinity_args=self.predict_affinity_args, pairformer_args=self.pairformer_args, msa_args=self.msa_args, steering_args=self.steering_args, diffusion_process_args=self.diffusion_process_args)
         predict_affinity(
@@ -974,6 +1015,10 @@ class Boltzina:
         self.boltz_model = None
         gc.collect()
         torch.cuda.empty_cache()
+        write_backend_metadata(
+            self.output_dir, self.scoring_backend, state="complete",
+            batch_size=self.batch_size, seed=self.seed,
+        )
 
     def _extract_docking_score(self, docked_pdbqt: Path, pose_idx: int) -> Optional[float]:
         try:
