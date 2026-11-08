@@ -37,6 +37,25 @@ def test_msa_rows_are_resampled_per_call():
     assert torch.equal(torch.get_rng_state(), state)
 
 
+def test_fixed_pose_trunk_disables_automatic_cuda_graph_capture(monkeypatch):
+    """CPU MSA sampling cannot be captured or frozen into a CUDA graph."""
+    from boltzina.affinity.bioir_model import FixedPoseAffinity
+    from bionemo_ir.models.boltz2 import Boltz2Affinity
+
+    class ConfigChecked(Exception):
+        pass
+
+    def check_config(self, *, config, include_load_weights):
+        assert config.trunk.graph_optimization_config is None
+        assert config.skip_run_structure is True
+        assert config.confidence_prediction is False
+        raise ConfigChecked
+
+    monkeypatch.setattr(Boltz2Affinity, '__init__', check_config)
+    with pytest.raises(ConfigChecked):
+        FixedPoseAffinity.from_checkpoint('unused.ckpt')
+
+
 @pytest.mark.parametrize("cyclic", [False, True])
 def test_relative_position_encoder_keeps_batch_axis(cyclic):
     from types import SimpleNamespace

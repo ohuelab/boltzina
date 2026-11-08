@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boltzina"
-version = "1.1.0"
+version = "1.1.1"
 description = "Efficient and accurate virtual screening via docking-guided binding prediction with Boltz-2"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

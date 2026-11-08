@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] - 2026-11-08
+
+Boltzina 1.1.1 fixes a CUDA Graph capture error that could stop fixed-pose
+affinity scoring with `--scoring-backend bioir` when using BioIR 0.2.1.
+
+### Fixed
+
+- Disable automatic CUDA Graph capture in the BioIR trunk so that CPU-based MSA
+  sampling runs on each recycle without being captured in a CUDA graph.
+
 ## [1.1.0] - 2026-11-07
 
 Boltzina 1.1.0 adds accelerated fixed-pose affinity scoring with NVIDIA BioNeMo

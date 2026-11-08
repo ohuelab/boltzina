@@ -56,6 +56,9 @@ class FixedPoseAffinity(Boltz2Affinity):
         config = cls.get_pretrained_config()
         config.skip_run_structure = True
         config.confidence_prediction = False
+        # GraphRegion policies capture by default in BioIR 0.2.1. CPU RNG
+        # sampling must execute on every recycle, outside CUDA graph replay.
+        config.trunk.graph_optimization_config = None
         for head in (config.affinity.module1, config.affinity.module2):
             head.set_dtype(torch.float32)
         model = cls(config=config, include_load_weights=False)
