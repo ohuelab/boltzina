@@ -1,6 +1,13 @@
-# Boltzina
-![png](https://arxiv.org/html/2508.17555v1/x1.png)
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ohuelab/boltzina/main/docs/assets/boltzina-wordmark-dark.svg">
+    <img alt="Boltzina" src="https://raw.githubusercontent.com/ohuelab/boltzina/main/docs/assets/boltzina-wordmark.svg" width="440">
+  </picture>
+</h1>
+
 Boltzina is a pipeline that combines AutoDock Vina (or Uni-Dock2) docking with Boltz-2 structure prediction and affinity scoring for virtual screening.
+
+![Boltzina workflow](https://arxiv.org/html/2508.17555v1/x1.png)
 
 ## Quick Start
 
